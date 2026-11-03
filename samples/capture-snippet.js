@@ -1,16 +1,16 @@
-// TES sample capture helper (v2)
+// TRES sample capture helper (v2)
 // Paste this whole file into the DevTools console on https://www.twitch.tv/drops/campaigns,
-// then call tesCapture(). See samples_readme.md for which sample needs which call.
+// then call tresCapture(). See samples_readme.md for which sample needs which call.
 //
-//   await tesCapture('page_source_default.html')               // page exactly as it is now
-//   await tesCapture('page_source_opencampaigns.html', [])     // open every campaign in turn, stitch the bodies in
-//   await tesCapture('some_name.html', ['Marvel Rivals'])      // open only campaigns for these game names
+//   await tresCapture('page_source_default.html')               // page exactly as it is now
+//   await tresCapture('page_source_opencampaigns.html', [])     // open every campaign in turn, stitch the bodies in
+//   await tresCapture('some_name.html', ['Marvel Rivals'])      // open only campaigns for these game names
 //
 // The result is downloaded as a file (move it from Downloads into samples/).
-// It is also kept in window.tesSample; if the download fails, run:  copy(tesSample)
+// It is also kept in window.tresSample; if the download fails, run:  copy(tresSample)
 // copy() only works when typed directly at the console prompt, not inside this script.
 
-window.tesCapture = async function (filename, games) {
+window.tresCapture = async function (filename, games) {
 	const root = document.querySelector('.drops-root__content');
 	if (!root) throw new Error('No .drops-root__content found. Is the All Campaigns list loaded?');
 	const sel = '.accordion-header[role="heading"][aria-level="3"]';
@@ -38,7 +38,7 @@ window.tesCapture = async function (filename, games) {
 			else if (!last) problems.push(`${game}: body stayed empty`);
 			else if (stable < 3) problems.push(`${game}: body still changing after 8s`);
 			captured.set(i, header.nextElementSibling?.cloneNode(true));
-			console.log(`[tesCapture] ${captured.size} ${game}`);
+			console.log(`[tresCapture] ${captured.size} ${game}`);
 		}
 	}
 
@@ -63,7 +63,7 @@ window.tesCapture = async function (filename, games) {
 		`problems: ${problems.length ? problems.join('; ') : 'none'}`
 	].join('\n');
 	const html = `<!--\n${meta}\n-->\n${clone.outerHTML}`;
-	window.tesSample = html;
+	window.tresSample = html;
 
 	const link = document.createElement('a');
 	link.href = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
@@ -73,8 +73,8 @@ window.tesCapture = async function (filename, games) {
 	link.remove();
 	setTimeout(() => URL.revokeObjectURL(link.href), 10000);
 
-	if (problems.length) console.warn('[tesCapture] problems:\n' + problems.join('\n'));
-	console.log(`[tesCapture] ${filename}: ${html.length} chars, ${headers.length} campaigns, ${captured.size} bodies stitched. Saved to window.tesSample.`);
+	if (problems.length) console.warn('[tresCapture] problems:\n' + problems.join('\n'));
+	console.log(`[tresCapture] ${filename}: ${html.length} chars, ${headers.length} campaigns, ${captured.size} bodies stitched. Saved to window.tresSample.`);
 	return meta;
 };
-console.log('[tesCapture] ready. Example: await tesCapture(\'page_source_default.html\')');
+console.log('[tresCapture] ready. Example: await tresCapture(\'page_source_default.html\')');

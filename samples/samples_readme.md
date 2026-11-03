@@ -10,10 +10,10 @@ Those save the empty page Twitch's server sends. The campaign list is built afte
 
 1. Log in and open the page named in the table below. Wait until it has loaded.
 2. Open DevTools (F12) and go to the **Console** tab.
-3. Paste the full contents of `capture-snippet.js` and press Enter. It prints `[tesCapture] ready`. Paste it again after any page reload or tab change.
-4. Run the `tesCapture(...)` call for the sample you want.
+3. Paste the full contents of `capture-snippet.js` and press Enter. It prints `[tresCapture] ready`. Paste it again after any page reload or tab change.
+4. Run the `tresCapture(...)` call for the sample you want.
    - The file downloads to your **Downloads** folder. Move it into this folder, replacing the old copy.
-   - If no download appears, type `copy(tesSample)` at the console prompt and paste the clipboard into the file.
+   - If no download appears, type `copy(tresSample)` at the console prompt and paste the clipboard into the file.
 5. Check the console for `problems:` warnings. Each file starts with a comment block recording when, where and how it was captured, and any problems.
 
 Things to know:
@@ -29,12 +29,12 @@ All of these exist. They were captured on 2026-11-03 (America/Vancouver): the ca
 
 | File | Page | How to capture | What it's for |
 |---|---|---|---|
-| `page_source_default.html` | /drops/campaigns | Reload. Don't open anything. Then run `await tesCapture('page_source_default.html')` | The collapsed baseline: headers, sections, dates, counts. |
-| `page_source_opencampaigns.html` | /drops/campaigns | Prepare first (see below). Then run `await tesCapture('page_source_opencampaigns.html', [])` | Every campaign's body: title, reward names, reward types, earn requirements, connection state, closed watermark. |
-| `page_source_single_expanded.html` | /drops/campaigns | Reload. Open one campaign by hand (ARC Raiders last time). Then run `await tesCapture('page_source_single_expanded.html')` | The real state the script sees: one body present, its button set to `aria-expanded="true"`. |
-| `page_source_expand_then_collapse.html` | /drops/campaigns | Continue straight from the previous sample, without reloading. Close that same campaign, wait 2 seconds, then run `await tesCapture('page_source_expand_then_collapse.html')` | Shows Twitch keeps the body after closing and only changes `aria-expanded` and a CSS class. |
-| `page_source_other_tab.html` | /drops/inventory | Click the **Inventory** tab (or open https://www.twitch.tv/drops/inventory). Click **Load More** under Claimed until it disappears, if you want the full history. Paste the snippet again, then run `await tesCapture('page_source_other_tab.html')`. The header will say `campaigns: 0`, which is expected. | The In Progress (with per-reward %) and Claimed lists. Used to plan claimed and progress detection later. |
-| `page_source_open_reward.html` | /drops/campaigns | Optional. Only when an "Open Reward Campaigns" section exists. Run `await tesCapture('page_source_open_reward.html', ['<game name>'])` | The Open Reward layout, which differs from Drop campaigns. No current sample. |
+| `page_source_default.html` | /drops/campaigns | Reload. Don't open anything. Then run `await tresCapture('page_source_default.html')` | The collapsed baseline: headers, sections, dates, counts. |
+| `page_source_opencampaigns.html` | /drops/campaigns | Prepare first (see below). Then run `await tresCapture('page_source_opencampaigns.html', [])` | Every campaign's body: title, reward names, reward types, earn requirements, connection state, closed watermark. |
+| `page_source_single_expanded.html` | /drops/campaigns | Reload. Open one campaign by hand (ARC Raiders last time). Then run `await tresCapture('page_source_single_expanded.html')` | The real state the script sees: one body present, its button set to `aria-expanded="true"`. |
+| `page_source_expand_then_collapse.html` | /drops/campaigns | Continue straight from the previous sample, without reloading. Close that same campaign, wait 2 seconds, then run `await tresCapture('page_source_expand_then_collapse.html')` | Shows Twitch keeps the body after closing and only changes `aria-expanded` and a CSS class. |
+| `page_source_other_tab.html` | /drops/inventory | Click the **Inventory** tab (or open https://www.twitch.tv/drops/inventory). Click **Load More** under Claimed until it disappears, if you want the full history. Paste the snippet again, then run `await tresCapture('page_source_other_tab.html')`. The header will say `campaigns: 0`, which is expected. | The In Progress (with per-reward %) and Claimed lists. Used to plan claimed and progress detection later. |
+| `page_source_open_reward.html` | /drops/campaigns | Optional. Only when an "Open Reward Campaigns" section exists. Run `await tresCapture('page_source_open_reward.html', ['<game name>'])` | The Open Reward layout, which differs from Drop campaigns. No current sample. |
 
 ### Preparing for `page_source_opencampaigns.html`
 

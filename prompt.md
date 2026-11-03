@@ -1,10 +1,10 @@
-# TES Drop Campaigns — userscript specification
+# TRES Drop Campaigns — userscript specification
 
 Write a Tampermonkey userscript that lets the user hide Twitch Drops campaigns they don't care about or have finished. Then they can see only the new and relevant ones on https://www.twitch.tv/drops/campaigns.
 
 This is a from-scratch rewrite. An earlier version (v0.4.0) was installed in Tampermonkey, but its source has been deleted. Its main bugs are listed in §10 so they aren't repeated.
 
-**File name:** the script is always `TES-DropCampaigns.user.js` in the repository root. Never put the version in the file name.
+**File name:** the script is always `TRES-DropCampaigns.user.js` in the repository root. Never put the version in the file name.
 
 - Users install the script from the GitHub repo, and Tampermonkey updates it from that same URL (§1). A file name that changed with each version would break updates for everyone.
 - Each new version overwrites this one file. Previous versions live in git history.
@@ -22,7 +22,7 @@ This is a from-scratch rewrite. An earlier version (v0.4.0) was installed in Tam
    - **Stage 3:** the rewards loader (§4.5), per-section hidden counts, and styling.
 4. **Every time the script is generated or changed, at every stage:**
    1. Write or update the tests for the behaviour that changed (§9).
-   2. Run `node --test tests/`.
+   2. Run `npm test`.
    3. Report the results.
 
    Don't stop for review, or call a stage done, while any test fails. If a test can't pass because the spec is wrong or the samples disagree with it, say so; don't weaken the test.
@@ -36,7 +36,7 @@ This is a from-scratch rewrite. An earlier version (v0.4.0) was installed in Tam
   - Pushing to `main` releases the change to every user, so push only after the tests in §9 pass.
 - `@homepageURL` https://github.com/Mirzero/TwitchRewardsEnhancementSuite
 - `@supportURL` https://github.com/Mirzero/TwitchRewardsEnhancementSuite/issues
-- `@updateURL` and `@downloadURL`: both set to https://raw.githubusercontent.com/Mirzero/TwitchRewardsEnhancementSuite/main/TES-DropCampaigns.user.js
+- `@updateURL` and `@downloadURL`: both set to https://raw.githubusercontent.com/Mirzero/TwitchRewardsEnhancementSuite/main/TRES-DropCampaigns.user.js
 - `@match https://www.twitch.tv/*`. Twitch is a single-page app, so a user who navigates to the drops page from elsewhere on Twitch never triggers a page load (see §6).
 - `@grant GM_getValue`, `GM_setValue`
 - `@run-at document-idle`
@@ -103,7 +103,10 @@ These were checked against the samples captured 2026-11-03.
   - `Progress & Redemption`
   - `Connection`, which is optional and appears in 99 of 102 campaigns. It shows "(Required)" and then either a `Connect` or a `Connected` button.
 - **Reward tile** = `container.parentElement` for each `.drop-benefit__image-container`. Inside the tile:
-  - image: `img` inside the container. The `src` has the form `https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/{uuid}.png`.
+  - image: `img` inside the container. The `src` takes one of three forms:
+    - `https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/{uuid}.png` for most rewards
+    - `https://static-cdn.jtvnw.net/badges/v1/{uuid}/…` for some Badge rewards (e.g. QSMP2)
+    - `…/REWARD/default.png`, a shared placeholder with no UUID (2 Palia rewards). Its `imageUuid` is null.
   - name: the `<p>` in the tile. It can have trailing spaces, so normalize it.
   - type: `span.tw-pill` in the tile. Types seen: `In-Game Item` (460 tiles) and `Badge` (10). Treat the type as free text; don't hardcode a list.
   - closed watermark: a tile descendant whose text is `This campaign has closed.`
@@ -203,14 +206,14 @@ A campaign is hidden if **any** rule matches it. Every rule is persisted.
   - Hide all {Game}
   - Hide all from {Publisher}
 - **Reward tiles:** when a body is loaded, add a **"✓ Claimed"** toggle to each reward tile. Dim tiles that are done, and label them "claimed" or "hidden type: Badge".
-- Mark every injected element with `data-tes`, and never inject it twice.
+- Mark every injected element with `data-tres`, and never inject it twice.
 
 ### 4.3 Filter panel
 
 **Placement and behaviour:**
 
 - **Position:** a floating panel in the top-right corner, just below Twitch's top navigation bar (about 5rem high). Use `position: fixed`, and keep it above Twitch's content but below Twitch's own menus and modals.
-- **Collapsed state:** the default. A small pill shows "TES · {hidden} hidden". It's a minimal intrusion, and it must not cover any campaign header's controls at widths of 1280px and up.
+- **Collapsed state:** the default. A small pill shows "TRES · {hidden} hidden". It's a minimal intrusion, and it must not cover any campaign header's controls at widths of 1280px and up.
 - **Opening and closing:**
   - Clicking the pill expands the full panel.
   - The panel collapses again when the user clicks anywhere outside it, presses Esc, or clicks its collapse button.
@@ -245,7 +248,7 @@ A campaign is hidden if **any** rule matches it. Every rule is persisted.
 
 ### 4.4 How hiding works
 
-- Hide the campaign root with a single class: `tes-hidden { display:none !important }`. Use `tes-dimmed` in show-hidden mode.
+- Hide the campaign root with a single class: `tres-hidden { display:none !important }`. Use `tres-dimmed` in show-hidden mode.
 - If every campaign in a section is hidden, append a note under that section's `<h4>`, such as "18 hidden". Don't hide the `<h4>` itself.
 
 ### 4.5 Rewards: learning, storing and loading
@@ -281,7 +284,7 @@ A campaign is hidden if **any** rule matches it. Every rule is persisted.
 **Storage: Tampermonkey storage (`GM_getValue` / `GM_setValue`), plus Export/Import in the panel.** This is the owner's decision.
 
 - Tampermonkey storage survives page reloads, Twitch logouts and clearing Twitch's site data. It's lost only if the script is deleted from Tampermonkey or the browser profile is lost. Export and Import guard against those cases.
-- **Export** downloads `tes-drop-campaigns-backup-YYYY-MM-DD.json` and records the time in `lastExportAt`.
+- **Export** downloads `tres-drop-campaigns-backup-YYYY-MM-DD.json` and records the time in `lastExportAt`.
 - **Import** reads a chosen file and **merges** it with existing data, rather than replacing it:
   - Union of the hide rules.
   - Union of the claimed marks.
@@ -290,7 +293,7 @@ A campaign is hidden if **any** rule matches it. Every rule is persisted.
 
 Details:
 
-- Use one GM key: `tesDropCampaigns.v2`. Don't read or migrate the v0.4.0 key (`tesDropCampaignFilters`); its IDs aren't compatible.
+- Use one GM key: `tresDropCampaigns.v2`. Don't read or migrate the v0.4.0 key (`tesDropCampaignFilters`); its IDs aren't compatible.
 - Contents:
   ```
   {
@@ -319,7 +322,7 @@ Details:
   - On leaving the page: cancel the rewards loader, disconnect observers and remove the panel.
 - **Observer:** one `MutationObserver` on `.drops-root__content`, with `{ childList: true, subtree: true }`.
   - Also watch the `aria-expanded` attribute, using `attributeFilter: ['aria-expanded']`.
-  - Ignore mutations whose added and removed nodes are all `[data-tes]` elements.
+  - Ignore mutations whose added and removed nodes are all `[data-tres]` elements.
   - Debounce scans by about 150ms.
   - If Twitch replaces the `.drops-root__content` element, find it again and re-attach the observer.
 - **Scans must be cheap:**
@@ -375,9 +378,9 @@ if (typeof module !== 'undefined') module.exports = { extractCampaigns, parseDat
 
 ## 9. Tests
 
-Tests live in `tests/*.test.mjs`. They use Node's built-in test runner (`node:test`), with jsdom from `node_modules`. Run them all with `node --test tests/`.
+Tests live in `tests/*.test.mjs`. They use Node's built-in test runner (`node:test`), with jsdom from `node_modules`. Run them all with `npm test`.
 
-- The tests load `TES-DropCampaigns.user.js` from the project root.
+- The tests load `TRES-DropCampaigns.user.js` from the project root.
 - For each sample, read `now` from the `captured:` line in the sample's header comment.
 - **Run them every time the script is generated or changed (§0).** Add a test for each new behaviour and each bug fixed.
 
@@ -460,7 +463,7 @@ These use the opencampaigns model.
 
 Run `start()` against a sample in jsdom, with an in-memory storage adapter.
 
-- **Hiding:** with the defaults, exactly 18 campaign roots get `tes-hidden`.
+- **Hiding:** with the defaults, exactly 18 campaign roots get `tres-hidden`.
 - **Header buttons:** exactly one Hide button is injected per header. Running a second scan doesn't duplicate them.
 - **No loop:** after a scan, hiding a campaign triggers no further scans.
 - **Header button clicks:** clicking the Hide button doesn't change the header button's `aria-expanded`.
@@ -514,8 +517,8 @@ This is **not** for this version; it's recorded so the design leaves room for it
 ## 12. Deliverables
 
 1. The assumptions list (§0).
-2. `TES-DropCampaigns.user.js`, with `@version` bumped (§1).
-3. `tests/*.test.mjs` (§9), plus the output of `node --test tests/` showing every test passing.
+2. `TRES-DropCampaigns.user.js`, with `@version` bumped (§1).
+3. `tests/*.test.mjs` (§9), plus the output of `npm test` showing every test passing.
 4. **Live validation steps.** Write a numbered checklist the owner can follow on the real page. Include the following checks:
    - Compare the diagnostics header count with the campaigns parsed.
    - Spot-check three campaigns against what's on screen.
