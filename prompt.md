@@ -33,6 +33,7 @@ This is a from-scratch rewrite. An earlier version (v0.4.0) was installed in Tam
 - `@name` Twitch Rewards Enhancement Suite
 - `@namespace` https://github.com/Mirzero/TwitchRewardsEnhancementSuite
 - `@version`: the first repo release is **0.6.0**. It skips 0.5.0 because Stage 1/2 builds at 0.5.0 were pasted into Tampermonkey by hand, and Tampermonkey only updates to a higher version. After that, bump once per release: the minor version for features, the patch version for fixes (see `agents/agents.md` for the exact rule).
+  - **1.0.0** is the first stable release (the owner's call): Campaigns filters, the Inventory reader and the introduction. It replaced the unreleased 0.10.0. From here, the same rule applies (1.0.0 → 1.1.0 for features, → 1.0.1 for fixes); a major bump only when the owner asks.
   - **Every change pushed to `main` must bump `@version`.** Tampermonkey only installs an update when the version is higher than the installed one.
   - Pushing to `main` releases the change to every user, so push only after the tests in §9 pass.
 - `@homepageURL` https://github.com/Mirzero/TwitchRewardsEnhancementSuite
@@ -221,10 +222,11 @@ A campaign is hidden if **any** rule matches it. Every rule is persisted.
 **Placement and behaviour:**
 
 - **Position:** a floating panel in the top-right corner, just below Twitch's top navigation bar (about 5rem high). Use `position: fixed`, and keep it above Twitch's content but below Twitch's own menus and modals.
-- **Collapsed state:** the default. A small pill shows "TRES · {hidden} hidden". It's a minimal intrusion, and it must not cover any campaign header's controls at widths of 1280px and up.
+- **Collapsed state:** the default, except on the very first run, when the panel opens on the introduction (§4.8). A small pill shows "TRES · {hidden} hidden". It's a minimal intrusion, and it must not cover any campaign header's controls at widths of 1280px and up.
 - **Opening and closing:**
   - Clicking the pill expands the full panel.
   - It collapses **only** when the user clicks its collapse button ("–") or presses Esc.
+  - The expanded panel's title row has two buttons in its top-right corner: **?** (reopens the introduction, §4.8) and then "–".
   - **Clicks outside the panel never collapse it**, whether on Twitch's page, on the TRES header buttons or pills, or anywhere else, so the user can work the page with the panel open. (An earlier version also collapsed on any outside click; the owner removed that.)
   - While the rewards loader runs, the collapsed pill shows its progress.
 - **Expanded size:** at most 380px wide and `calc(100vh - 7rem)` tall, scrolling internally. While expanded, it may overlap the page.
@@ -339,6 +341,27 @@ Everything TRES injects into Twitch's page is visibly TRES's, never bare text th
 - Hover states change opacity only, never the border colour, so the brand colour is always visible.
 - Any new injected element must follow these rules.
 
+### 4.8 Introduction
+
+A short introduction that tells a new user what TRES does and where to find it.
+
+- **First run:** the first time the panel is created, on either the Campaigns or the Inventory page, it opens **expanded on the introduction** instead of collapsed. The panel gets `data-intro="true"`, and everything in its body except the title row and the introduction is hidden (by CSS, so the sections keep their own `hidden` state).
+- **Contents** (the same on both pages; `INTRO_LINES`): a "Welcome to TRES (Twitch Rewards Enhancement Suite)" title, then four short points:
+  1. TRES hides Drops campaigns you don't need; closed campaigns are hidden from the start.
+  2. The Hide and ⋯ buttons on each campaign header.
+  3. ✓ Claimed, or opening the Inventory tab once; a campaign hides once all its rewards are claimed.
+  4. The TRES pill holds filters, sorting, Load all rewards and Backup, and ? shows this again.
+
+  Then a **Got it** button.
+- **Closing it:**
+  - **Got it** on the first-run introduction collapses the panel to the pill.
+  - "–" or Esc while the introduction shows also closes it and collapses the panel.
+  - Either way, the time is saved under its own GM key, `tresIntro.v1`, and the introduction never opens on its own again, on either page. Clicks outside the panel don't close it (§4.3).
+  - It has its own key, not a settings field, because the Inventory page never writes the settings (§11.2) and a Campaigns tab open alongside would save its copy over the change.
+  - Reset all, Export and Import leave it alone.
+- **Reopening:** the **?** button in the expanded panel's title row, beside "–", shows the introduction again. **Got it** then returns to the expanded panel instead of collapsing it.
+- The title uses its own class (`tres-intro-title`), not `tres-summary`, which is the panel's summary line.
+
 ## 5. Persistence
 
 **Every manual action must persist:** hidden campaigns, games, publishers and reward types; claimed marks; and the toggles.
@@ -355,7 +378,7 @@ Everything TRES injects into Twitch's page is visibly TRES's, never bare text th
 
 Details:
 
-- Settings use one GM key: `tresDropCampaigns.v2`. The Inventory snapshot has its own key (§11.6). Don't read or migrate the v0.4.0 key (`tesDropCampaignFilters`); its IDs aren't compatible.
+- Settings use one GM key: `tresDropCampaigns.v2`. The Inventory snapshot has its own key (§11.6), and so does the time the introduction was closed (`tresIntro.v1`, §4.8). Don't read or migrate the v0.4.0 key (`tesDropCampaignFilters`); its IDs aren't compatible.
 - Contents:
   ```
   {
@@ -442,7 +465,7 @@ if (typeof module !== 'undefined') module.exports = { extractCampaigns, parseDat
   - `options.now`: a function returning the current time. The live script uses `Date.now`; tests pass the sample's capture time.
   - `options.loaderPollMs`: shortens the polling interval of the rewards loader and of Scan full history in tests.
   - `start()` returns `{ app, inventory, stop }`: the Campaigns app, the Inventory app, and teardown.
-- The storage adapter has `read`/`write` for settings and `readInventory`/`writeInventory`/`watchInventory(callback)` for the snapshot. `memoryStorage(settings, snapshot)` is the test adapter; two windows sharing one behave like two tabs.
+- The storage adapter has `read`/`write` for settings, `readInventory`/`writeInventory`/`watchInventory(callback)` for the snapshot, and `readIntro`/`writeIntro` for the introduction (null until it is closed). `memoryStorage(settings, snapshot, introAt = 0)` is the test adapter; two windows sharing one behave like two tabs. Its `introAt` defaults to a returning user, so tests start with the panel collapsed; pass `null` for a first run.
 - Make sure this works without Tampermonkey's `GM_*` functions being defined.
 
 ## 9. Tests
@@ -560,6 +583,11 @@ Run `start()` against a sample in jsdom, with an in-memory storage adapter.
   - Clicking the pill expands it.
   - Clicks outside it, including on Twitch's content and the TRES header buttons, leave it open.
   - The "–" button and Esc collapse it.
+- **Introduction (§4.8):**
+  - On a first run (`introAt` null), the panel opens expanded on the introduction, which mentions Hide, the Inventory tab and ?. Outside clicks leave it open.
+  - Got it collapses the panel and records the time; the next load, on either page, starts collapsed.
+  - "–" and Esc on the first-run introduction also record it; the pill then opens the normal panel.
+  - For a returning user, ? sits immediately before "–", reopens the introduction, and Got it returns to the expanded panel. The Inventory panel has ? too.
 - **Rewards loader:** using a sample whose bodies are already loaded, or a stub that fills a body when a header is clicked, the loader:
   - visits only campaigns whose rewards are unknown
   - stores what it reads
@@ -790,6 +818,7 @@ This happens on the Campaigns page, on every apply, as a pure function `matchInv
    - Spot-check three campaigns against what's on screen.
    - Open and close a campaign, and confirm its ID, rewards and hide state don't change.
    - Confirm Closed campaigns are hidden on first install, then toggle "Hide closed".
+   - On a fresh install (or after deleting the `tresIntro.v1` value in Tampermonkey's storage tab), confirm the introduction opens, Got it collapses it to the pill, and it doesn't return after a reload. Then confirm ? reopens it.
    - Check that the collapsed pill doesn't cover any campaign controls, that it expands on click, that it stays open while you click around the page, and that "–" or Esc collapses it.
    - Run Load all rewards, then reload and confirm the "rewards known" count stays and a second run has nothing to do.
    - Hide the Badge type and confirm the badge-only campaigns disappear.

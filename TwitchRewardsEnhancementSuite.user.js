@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitch Rewards Enhancement Suite
 // @namespace    https://github.com/Mirzero/TwitchRewardsEnhancementSuite
-// @version      0.9.0
+// @version      1.0.0
 // @description  Twitch Drops and rewards tools: hide, sort and track campaigns you don't care about or have already finished.
 // @author       Mirzero
 // @homepageURL  https://github.com/Mirzero/TwitchRewardsEnhancementSuite
@@ -31,6 +31,8 @@
 	// The Inventory snapshot has its own key, written only by the Inventory tab (spec §11.6).
 	const INVENTORY_KEY = 'tresInventory.v1';
 	const INVENTORY_SCHEMA = 1;
+	// When the user closed the first-run introduction; its own key, so either page may write it (spec §4.8).
+	const INTRO_KEY = 'tresIntro.v1';
 	const CAMPAIGNS_PATH = '/drops/campaigns';
 	const INVENTORY_PATH = '/drops/inventory';
 	const CONTENT_SELECTOR = '.drops-root__content';
@@ -865,11 +867,14 @@
 	 * Settings live under STORAGE_KEY; the Inventory snapshot under INVENTORY_KEY, so the
 	 * Inventory and Campaigns tabs never overwrite each other's data (spec §11.6).
 	 * `watchInventory(callback)` reports snapshot changes from any tab and returns an unsubscribe.
+	 * `readIntro`/`writeIntro` hold when the introduction was closed (spec §4.8), or null.
 	 */
 	function gmStorage() {
 		return {
 			read: () => GM_getValue(STORAGE_KEY, null),
 			write: (value) => GM_setValue(STORAGE_KEY, value),
+			readIntro: () => GM_getValue(INTRO_KEY, null),
+			writeIntro: (value) => GM_setValue(INTRO_KEY, value),
 			readInventory: () => GM_getValue(INVENTORY_KEY, null),
 			writeInventory: (value) => GM_setValue(INVENTORY_KEY, value),
 			watchInventory(callback) {
@@ -880,14 +885,20 @@
 		};
 	}
 
-	/** In-memory storage for tests. Two windows sharing one behave like two tabs. */
-	function memoryStorage(initial = null, initialInventory = null) {
+	/**
+	 * In-memory storage for tests. Two windows sharing one behave like two tabs.
+	 * `introAt` defaults to a returning user (introduction already closed); pass null for a first run.
+	 */
+	function memoryStorage(initial = null, initialInventory = null, introAt = 0) {
 		let value = initial === null ? null : clone(initial);
 		let inventory = initialInventory === null ? null : clone(initialInventory);
+		let intro = introAt;
 		const watchers = new Set();
 		return {
 			read: () => (value === null ? null : clone(value)),
 			write: (next) => { value = clone(next); },
+			readIntro: () => intro,
+			writeIntro: (next) => { intro = next; },
 			readInventory: () => (inventory === null ? null : clone(inventory)),
 			writeInventory(next) {
 				inventory = next === null ? null : clone(next);
@@ -904,6 +915,14 @@
 	// 5. Rendering
 	// =====================================================================
 
+	// The introduction's text (spec §4.8). The same on both pages.
+	const INTRO_LINES = [
+		'TRES hides the Drops campaigns you don\'t need, so new and unfinished ones stand out. Closed campaigns are hidden from the start.',
+		'Each campaign header gets two buttons: Hide hides that campaign, and ⋯ hides its whole game or publisher.',
+		'Tick ✓ Claimed on a reward, or open the Inventory tab once and TRES marks your claims and shows progress for you. A campaign hides once all its rewards are claimed.',
+		'Click the TRES pill in the top-right corner for filters, sorting, Load all rewards and Backup. Press ? there to see this again.'
+	];
+
 	const PANEL_CSS = `
 #tres-panel{position:fixed;top:calc(5rem + 8px);right:16px;z-index:1000;font:13px/1.4 Inter,Roobert,'Helvetica Neue',Helvetica,Arial,sans-serif;color:#efeff1}
 #tres-panel *,#tres-menu *{box-sizing:border-box}
@@ -914,6 +933,12 @@
 #tres-panel[data-expanded="true"] .tres-pill{display:none}
 #tres-panel .tres-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
 #tres-panel .tres-head strong{font-size:14px}
+#tres-panel .tres-head-buttons{display:flex;gap:4px}
+#tres-panel[data-intro="true"] .tres-body>:not(.tres-head):not(.tres-intro){display:none!important}
+#tres-panel:not([data-intro="true"]) .tres-intro{display:none}
+#tres-panel .tres-intro-title{margin:0 0 8px;color:#bf94ff;font-weight:600}
+#tres-panel .tres-intro ul{margin:0 0 10px;padding-left:18px}
+#tres-panel .tres-intro li{margin:4px 0}
 #tres-panel button.tres-btn{padding:3px 8px;border:0;border-radius:4px;background:#3d3d42;color:#efeff1;font:inherit;cursor:pointer}
 #tres-panel button.tres-btn:hover{background:#53535f}
 #tres-panel .tres-warning{margin:0 0 8px;padding:8px;border-radius:4px;background:#5c1a1a;color:#ffd4d4}
@@ -1040,9 +1065,11 @@
 
 	/**
 	 * The floating panel's frame, shared by the Campaigns and Inventory pages (spec §4.3, §11.5):
-	 * the style sheet, a collapsed pill, and a body that only "–" or Esc collapses.
+	 * the style sheet, a collapsed pill, a body that only "–" or Esc collapses, and the
+	 * introduction (spec §4.8), shown on the first run and reopened with "?".
+	 * `intro` is `{ seen, onSeen }`.
 	 */
-	function createShell(doc, win, title, page) {
+	function createShell(doc, win, title, page, intro) {
 		const style = element(doc, 'style');
 		style.id = 'tres-style';
 		style.setAttribute('data-tres', 'style');
@@ -1061,14 +1088,49 @@
 
 		const body = element(doc, 'div', 'tres-body');
 		const head = element(doc, 'div', 'tres-head');
+		const help = button(doc, '?', () => showIntro(true));
+		help.title = 'What is TRES?';
 		const collapse = button(doc, '–', () => setExpanded(false));
 		collapse.title = 'Collapse';
-		head.append(element(doc, 'strong', '', title), collapse);
-		body.append(head);
+		const headButtons = element(doc, 'div', 'tres-head-buttons');
+		headButtons.append(help, collapse);
+		head.append(element(doc, 'strong', '', title), headButtons);
+
+		const introBox = element(doc, 'div', 'tres-intro');
+		const introList = element(doc, 'ul');
+		introList.append(...INTRO_LINES.map((text) => element(doc, 'li', '', text)));
+		introBox.append(
+			element(doc, 'p', 'tres-intro-title', 'Welcome to TRES (Twitch Rewards Enhancement Suite)'),
+			introList,
+			button(doc, 'Got it', () => closeIntro())
+		);
+		body.append(head, introBox);
 		panel.append(pill, body);
+		panel.dataset.intro = 'false';
 		doc.body.appendChild(panel);
 
+		let introSeen = intro ? intro.seen : true;
+		// Opened with "?" returns to the panel when closed; the first-run intro collapses to the pill.
+		let introFromPanel = false;
+
+		function showIntro(fromPanel) {
+			introFromPanel = fromPanel;
+			panel.dataset.intro = 'true';
+			setExpanded(true);
+		}
+
+		function closeIntro(collapseToo = !introFromPanel) {
+			panel.dataset.intro = 'false';
+			if (!introSeen) {
+				introSeen = true;
+				if (intro) intro.onSeen();
+			}
+			if (collapseToo) panel.dataset.expanded = 'false';
+		}
+
 		function setExpanded(expanded) {
+			// Collapsing while the introduction shows counts as closing it, so it doesn't come back.
+			if (!expanded && panel.dataset.intro === 'true') closeIntro(true);
 			panel.dataset.expanded = String(expanded);
 		}
 		pill.addEventListener('click', () => setExpanded(true));
@@ -1077,12 +1139,14 @@
 			if (event.key === 'Escape' && panel.dataset.expanded === 'true') setExpanded(false);
 		};
 		doc.addEventListener('keydown', onKeyDown, true);
+		if (!introSeen) showIntro(false);
 
 		return {
 			panel,
 			pill,
 			body,
 			setExpanded,
+			showIntro,
 			destroy() {
 				doc.removeEventListener('keydown', onKeyDown, true);
 				panel.remove();
@@ -1091,8 +1155,8 @@
 		};
 	}
 
-	function createPanel(doc, win, actions) {
-		const { panel, pill, body, setExpanded, destroy } = createShell(doc, win, 'Drop campaign filters', 'campaigns');
+	function createPanel(doc, win, actions, intro) {
+		const { panel, pill, body, setExpanded, showIntro, destroy } = createShell(doc, win, 'Drop campaign filters', 'campaigns', intro);
 
 		const warning = element(doc, 'p', 'tres-warning', 'Unrecognised page. Is Twitch set to English?');
 		warning.hidden = true;
@@ -1284,6 +1348,7 @@
 			element: panel,
 			isExpanded: () => panel.dataset.expanded === 'true',
 			setExpanded,
+			showIntro,
 			update(view) {
 				if (isTextInputFocused(doc, panel)) pendingView = view;
 				else render(view);
@@ -1293,8 +1358,8 @@
 	}
 
 	/** The small panel on the Inventory page (spec §11.5): what was read, Scan full history, Clear and rescan, Diagnostics. */
-	function createInventoryPanel(doc, win, actions) {
-		const { panel, pill, body, setExpanded, destroy } = createShell(doc, win, 'TRES Inventory', 'inventory');
+	function createInventoryPanel(doc, win, actions, intro) {
+		const { panel, pill, body, setExpanded, showIntro, destroy } = createShell(doc, win, 'TRES Inventory', 'inventory', intro);
 		const line = element(doc, 'p', 'tres-note');
 		const counts = element(doc, 'p', 'tres-note');
 		const status = element(doc, 'p', 'tres-status');
@@ -1313,6 +1378,7 @@
 			element: panel,
 			isExpanded: () => panel.dataset.expanded === 'true',
 			setExpanded,
+			showIntro,
 			update(view) {
 				const snapshot = view.snapshot;
 				const history = view.history;
@@ -1769,7 +1835,7 @@
 				});
 			}
 			state.scanner = createScanner();
-			state.panel = createPanel(doc, win, actions);
+			state.panel = createPanel(doc, win, actions, introOf(storage, clock));
 			state.menu = createMenu(doc, win);
 			waitForContent();
 			state.timers.tick = win.setInterval(() => scanNow(), STATUS_TICK_MS);
@@ -2270,6 +2336,26 @@
 		return { route, scanNow, applyAll, deactivate, actions, state, flushWrite };
 	}
 
+	/** Whether the introduction was closed before, and how to record closing it (spec §4.8). */
+	function introOf(storage, clock) {
+		let seen = true;
+		try {
+			seen = !storage.readIntro || storage.readIntro() !== null;
+		} catch (error) {
+			console.warn(LOG_PREFIX, 'could not read the introduction flag', error);
+		}
+		return {
+			seen,
+			onSeen() {
+				try {
+					if (storage.writeIntro) storage.writeIntro(clock());
+				} catch (error) {
+					console.warn(LOG_PREFIX, 'could not save the introduction flag', error);
+				}
+			}
+		};
+	}
+
 	function readInventory(storage) {
 		try {
 			return storage.readInventory ? sanitizeInventory(storage.readInventory()) : null;
@@ -2321,7 +2407,7 @@
 
 		function activate() {
 			state.active = true;
-			state.panel = createInventoryPanel(doc, win, actions);
+			state.panel = createInventoryPanel(doc, win, actions, introOf(storage, clock));
 			state.signature = null;
 			waitForContent();
 			render();

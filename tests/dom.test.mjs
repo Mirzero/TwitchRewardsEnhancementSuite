@@ -242,6 +242,74 @@ test('panel: starts collapsed; the pill expands it; clicks outside never collaps
 	});
 });
 
+// Introduction (spec §4.8)
+const headButton = (panel, text) => [...panel.querySelectorAll('.tres-head button')].find((b) => b.textContent === text);
+const introShown = (panel) => panel.dataset.expanded === 'true' && panel.dataset.intro === 'true';
+
+test('intro: shown expanded on the first run; Got it collapses to the pill and is remembered', async () => {
+	const storage = tres.memoryStorage(null, null, null);
+	await withScript('page_source_default.html', ({ window, document, now }) => {
+		const panel = document.querySelector('#tres-panel');
+		assert.ok(introShown(panel), 'the panel opens on the introduction');
+		const intro = panel.querySelector('.tres-intro');
+		assert.match(intro.textContent, /Welcome to TRES/);
+		assert.match(intro.textContent, /Hide/);
+		assert.match(intro.textContent, /Inventory tab/);
+		assert.match(intro.textContent, /Press \? there/);
+		assert.match(document.querySelector('#tres-style').textContent, /data-intro="true"\] \.tres-body>:not\(\.tres-head\):not\(\.tres-intro\)\{display:none/, 'the rest of the panel is hidden meanwhile');
+		click(window, document.querySelector('.drops-root__content'));
+		assert.ok(introShown(panel), 'outside clicks leave it open');
+		[...intro.querySelectorAll('button')].find((b) => b.textContent === 'Got it').click();
+		assert.equal(panel.dataset.expanded, 'false', 'Got it collapses to the pill');
+		assert.equal(panel.dataset.intro, 'false');
+		assert.equal(storage.readIntro(), now, 'when it was closed is recorded');
+	}, { storage });
+	await withScript('page_source_default.html', ({ document }) => {
+		assert.equal(document.querySelector('#tres-panel').dataset.expanded, 'false', 'not shown again on the next load');
+	}, { storage });
+	await withScript('page_source_other_tab.html', ({ document }) => {
+		assert.equal(document.querySelector('#tres-panel').dataset.expanded, 'false', 'nor on the Inventory page');
+	}, { storage, url: 'https://www.twitch.tv/drops/inventory' });
+});
+
+test('intro: "–" or Esc on the first-run intro also counts as closing it', async () => {
+	for (const close of ['collapse', 'escape']) {
+		const storage = tres.memoryStorage(null, null, null);
+		await withScript('page_source_default.html', ({ window, document }) => {
+			const panel = document.querySelector('#tres-panel');
+			if (close === 'collapse') headButton(panel, '–').click();
+			else document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+			assert.equal(panel.dataset.expanded, 'false', close);
+			assert.equal(panel.dataset.intro, 'false', close);
+			assert.notEqual(storage.readIntro(), null, close);
+			click(window, panel.querySelector('.tres-pill'));
+			assert.equal(panel.dataset.intro, 'false', 'the pill opens the normal panel afterwards');
+		}, { storage });
+	}
+});
+
+test('intro: the ? button beside "–" reopens it, and Got it returns to the panel', async () => {
+	await withScript('page_source_default.html', ({ window, document }) => {
+		const panel = document.querySelector('#tres-panel');
+		assert.equal(panel.dataset.expanded, 'false', 'a returning user starts collapsed');
+		click(window, panel.querySelector('.tres-pill'));
+		const help = headButton(panel, '?');
+		assert.ok(help, 'a ? button');
+		assert.equal(help.nextElementSibling, headButton(panel, '–'), 'next to the collapse button');
+		help.click();
+		assert.ok(introShown(panel));
+		[...panel.querySelectorAll('.tres-intro button')].find((b) => b.textContent === 'Got it').click();
+		assert.equal(panel.dataset.expanded, 'true', 'back to the expanded panel');
+		assert.equal(panel.dataset.intro, 'false');
+	});
+	await withScript('page_source_other_tab.html', ({ window, document }) => {
+		const panel = document.querySelector('#tres-panel');
+		click(window, panel.querySelector('.tres-pill'));
+		headButton(panel, '?').click();
+		assert.ok(introShown(panel), 'the Inventory panel has it too');
+	}, { url: 'https://www.twitch.tv/drops/inventory' });
+});
+
 test('diagnostics: header and parse counts are shown', async () => {
 	await withScript('page_source_default.html', ({ document }) => {
 		const lines = [...document.querySelectorAll('#tres-panel .tres-diag li')].map((li) => li.textContent);
