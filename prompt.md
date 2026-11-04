@@ -31,7 +31,7 @@ This is a from-scratch rewrite. An earlier version (v0.4.0) was installed in Tam
 
 - `@name` Twitch Drops Campaign Filters
 - `@namespace` https://github.com/Mirzero/TwitchRewardsEnhancementSuite
-- `@version` 0.5.0. The installed version is 0.4.0. After that, bump the patch version for fixes and the minor version for features.
+- `@version`: the first repo release is **0.6.0**. It skips 0.5.0 because Stage 1/2 builds at 0.5.0 were pasted into Tampermonkey by hand, and Tampermonkey only updates to a higher version. After that, bump once per release: the minor version for features, the patch version for fixes (see `agents/agents.md` for the exact rule).
   - **Every change pushed to `main` must bump `@version`.** Tampermonkey only installs an update when the version is higher than the installed one.
   - Pushing to `main` releases the change to every user, so push only after the tests in §9 pass.
 - `@homepageURL` https://github.com/Mirzero/TwitchRewardsEnhancementSuite
@@ -134,6 +134,8 @@ These are used in the acceptance tests.
   - No game name appears with two different publishers. This case is still allowed and must be handled.
   - 9 games have one Open and one Closed campaign. For example, Overwatch / Blizzard has an Open campaign running Oct 30 – Dec 1 and a Closed one that ran Oct 6 – Nov 3.
   - Game + publisher + date range is unique across all 102 campaigns without the section, so the section isn't needed in the ID.
+  - **Order:** within each section, Twitch lists campaigns by **start date, oldest first**. All 84 Open and all 18 Closed campaigns follow it. End dates are in no particular order.
+  - **Containers:** each section's campaign roots are the **only children of a single container element**. There is one container per section, holding nothing else. This is what makes sorting with CSS safe (§4.6).
 - **`page_source_opencampaigns.html`:**
   - The same 102 campaigns, all with bodies loaded.
   - 470 reward tiles: 460 `In-Game Item` and 10 `Badge`. Every tile has a name and a type.
@@ -197,11 +199,15 @@ A campaign is hidden if **any** rule matches it. Every rule is persisted.
 
    A mix of the two also counts: for example, a campaign whose only rewards are a claimed item and a Badge is hidden when Badge is a hidden type.
 
-**Defaults on first install:** Hide closed is on. Everything else is off or empty: no hidden campaigns, games, publishers or reward types; hide upcoming off; show hidden off.
+**Defaults on first install:** Hide closed is on, and sorting is "Newest first" (§4.6). Everything else is off or empty: no hidden campaigns, games, publishers or reward types; hide upcoming off; show hidden off.
 
 ### 4.2 Controls on the page
 
-- **Campaign header:** inject a small **Hide** button into each `.accordion-header`, **outside** its `<button>`, so clicking it never opens or closes the campaign. It opens a small menu with three choices:
+- **Campaign header:** inject a small **Hide** button into each `.accordion-header`, **outside** its `<button>`, so clicking it never opens or closes the campaign.
+  - Place it in the header's **top-right corner** (about 3px from the top and right edges), small (11px text, 16px tall) and slightly faded until hovered.
+  - It must not sit over the date text or the expand chevron. (An earlier version centred it vertically beside the chevron, and it covered both.)
+  - In show-hidden mode, the "hidden: {reason}" label sits beside it.
+  - It opens a small menu with three choices:
   - Hide this campaign
   - Hide all {Game}
   - Hide all from {Publisher}
@@ -221,15 +227,17 @@ A campaign is hidden if **any** rule matches it. Every rule is persisted.
 - **Expanded size:** at most 380px wide and `calc(100vh - 7rem)` tall, scrolling internally. While expanded, it may overlap the page.
 - **Style:** match Twitch's dark theme.
 
-**Contents, top to bottom:**
+**Contents, top to bottom.** Below the summary line, **every section is collapsible** (a `<details>` with its title as the `<summary>`). Each starts open unless noted otherwise.
 
-- **Summary line:** "{visible} shown · {hidden} hidden · {total} campaigns ({closed} closed)".
-- **Hide closed campaigns:** a prominent standalone toggle, with a count.
-- **Hide upcoming**.
-- **Show hidden** toggle: hidden campaigns are shown dimmed with a label saying which rule hid them. This mode is for checking the filters.
+- **Summary line:** "{visible} shown · {hidden} hidden · {total} campaigns ({closed} closed)". Not collapsible.
+- **Visibility:**
+  - **Hide closed campaigns:** a prominent toggle, with the count of closed campaigns beside it.
+  - **Hide upcoming**, with the count of upcoming campaigns.
+  - **Show hidden campaigns (dimmed)**, with the count of hidden campaigns (for any reason, the same number as on the pill). Hidden campaigns are shown dimmed with a label saying which rule hid them. This mode is for checking the filters.
+- **Sorting:** one radio button per sort order in §4.6, with the current order selected.
 - **Rewards:**
   - "Rewards known for N / total campaigns".
-  - The **Load all rewards** button (§4.5).
+  - The **Load all rewards**, **Re-read all rewards** and **Cancel** buttons, plus a status line (§4.5).
   - Reward types: one checkbox per type seen (Badge, In-Game Item, …). Show two counts for each: rewards of that type, and campaigns made up only of that type.
 - **Open campaigns** and **Closed campaigns:** two separate groups, so Closed entries don't clutter the Open lists.
   - Each group has a Publishers list and a Games list ("Game — Publisher"). Each entry shows its campaign count in that group and a hide toggle. Each list has a text box that filters it, and is sorted by name.
@@ -237,9 +245,10 @@ A campaign is hidden if **any** rule matches it. Every rule is persisted.
   - The Closed group starts collapsed.
 - **Hidden campaigns:** a list of campaigns hidden by rule 2, each with an "unhide" button. It includes campaigns no longer on the page.
 - **Claimed rewards:** the count, plus a "clear claimed marks for campaigns that are no longer listed" button.
-- **Backup:** Export and Import buttons, plus "last backup: N days ago" (§5).
-- **Reset all** button, which asks for confirmation.
-- **Diagnostics** subpanel, collapsed by default (§7).
+- **Backup:**
+  - Export and Import buttons, plus "last backup: N days ago" (§5).
+  - A **Reset all** button, which asks for confirmation. It resets the hide rules and toggles to the §4.1 defaults and clears claimed marks, but **keeps learned rewards**, since those are a cache, not settings.
+- **Diagnostics** (§7), which starts collapsed.
 
 **Rules for the controls:**
 
@@ -265,6 +274,7 @@ A campaign is hidden if **any** rule matches it. Every rule is persisted.
 
 **The Load all rewards button:**
 
+- Its label shows how many campaigns it will open, e.g. "Load all rewards (40)". When every campaign's rewards are known, it reads "All rewards known" and is disabled. "Re-read all rewards (102)" shows its count the same way.
 - It only ever runs when the user clicks it; it never starts on its own.
 - It opens each campaign whose rewards are unknown, one at a time. For each one:
   1. Wait until the body exists and has stopped changing (about 3 identical polls 200ms apart, at most 8s).
@@ -276,6 +286,28 @@ A campaign is hidden if **any** rule matches it. Every rule is persisted.
 - It shows progress ("Loading rewards 12 / 40") in the panel and in the collapsed pill, and has a Cancel button. Cancelling keeps everything learned so far.
 - Campaigns that time out are counted and listed in diagnostics. They stay unknown.
 - Because rewards are stored, later runs only need to cover campaigns that are new since the last run.
+
+### 4.6 Sorting
+
+The user can choose the order of campaigns **within each section**. Open and Closed stay separate, and the sections themselves stay in Twitch's order.
+
+| Option (`rules.sortBy`) | Label | Order |
+|---|---|---|
+| `newest` *(default)* | Newest first | Start date, latest first |
+| `twitch` | Twitch order (oldest first) | Twitch's own DOM order, which is start date, oldest first (§2.4) |
+| `ending` | Ending soonest | End date, earliest first |
+| `game` | Game A–Z | Game name, then publisher |
+| `publisher` | Publisher A–Z | Publisher, then game name |
+
+- **Ties and missing values:** break ties by Twitch's order, so sorting is stable. A campaign whose dates didn't parse sorts after the dated ones. Compare names with `localeCompare`, ignoring case.
+- **Sort visually, never move elements.** Moving Twitch's nodes would conflict with how Twitch's own code manages the page, which could undo the order or break opening and closing. Instead:
+  - Give each section's container (the shared parent of its campaign roots, §2.4) the class `tres-sorted`, styled `display:flex; flex-direction:column`.
+  - Set each campaign root's `style.order` to its sorted position.
+  - For `twitch`, remove the class and the `order` values, leaving the page exactly as Twitch rendered it.
+  - Mark nothing with `data-tres` for this; it's a class and a style on existing elements. Neither is an observed attribute, so applying the order never triggers a scan.
+- **When to apply:** re-apply the order whenever rules are applied (after each scan and each change of setting), so new campaigns and re-rendered sections are sorted too.
+- **Known side effect:** keyboard Tab order and screen readers still follow Twitch's DOM order, not the visual order.
+- **Cleanup:** when the script stops (leaving the page, or "unrecognised page"), remove `tres-sorted` and every `order` value it set.
 
 ## 5. Persistence
 
@@ -301,6 +333,7 @@ Details:
     lastExportAt,
     rules: {
       hideClosed: true, hideUpcoming: false, showHidden: false,
+      sortBy: 'newest',            // one of the §4.6 options; anything else falls back to 'newest'
       hiddenRewardTypes: [normalized type],
       hiddenCampaigns:  { id: { game, publisher, dateText, title, hiddenAt } },
       hiddenGames:      { gameKey: { game, publisher } },
@@ -373,7 +406,9 @@ One file, inside an IIFE, with clearly separated sections in this order:
 if (typeof module !== 'undefined') module.exports = { extractCampaigns, parseDateRange, hideReason, rewardDone, mergeImport, prune, start, … };
 ```
 
-- When loaded by Node, don't start automatically. Tests call `start(window, storageAdapter)` themselves.
+- When loaded by Node, don't start automatically. Tests call `start(window, storageAdapter, options)` themselves.
+  - `options.now`: a function returning the current time. The live script uses `Date.now`; tests pass the sample's capture time.
+  - `options.loaderPollMs`: shortens the rewards loader's polling interval in tests.
 - Make sure this works without Tampermonkey's `GM_*` functions being defined.
 
 ## 9. Tests
@@ -381,7 +416,8 @@ if (typeof module !== 'undefined') module.exports = { extractCampaigns, parseDat
 Tests live in `tests/*.test.mjs`. They use Node's built-in test runner (`node:test`), with jsdom from `node_modules`. Run them all with `npm test`.
 
 - The tests load `TRES-DropCampaigns.user.js` from the project root.
-- For each sample, read `now` from the `captured:` line in the sample's header comment.
+- For each sample, read `now` from the `captured:` line in the sample's header comment. This includes the tests that run the whole script (§9.6): they must pass `options.now`, never the real clock. Otherwise results change as real campaigns end; this broke 4 tests the day after the samples were captured.
+- Pin the timezone to the capture offset: set `process.env.TZ = 'Etc/GMT+7'` before any `Date` is created. Node's own timezone data can disagree with the browser that captured the samples.
 - **Run them every time the script is generated or changed (§0).** Add a test for each new behaviour and each bug fixed.
 
 ### 9.1 Metadata (`metadata.test.mjs`)
@@ -450,6 +486,12 @@ These use the opencampaigns model.
   - Hiding gameKey `overwatch|blizzard` hides **both** Overwatch campaigns (Open and Closed).
   - Hiding a publisher hides all of its campaigns in every section.
 - **Single campaign:** hiding one campaign ID hides exactly one campaign.
+- **Sorting (`sortCampaigns`, a pure function exported for tests):**
+  - `twitch` keeps the extracted order.
+  - `newest` puts the latest start first: Rise Online is first among Open campaigns in the default sample (Tue, Nov 3, 10:59 AM).
+  - `ending` puts the earliest end first.
+  - `game` and `publisher` are alphabetical, ignoring case.
+  - Ties keep Twitch's order, and undated campaigns go last.
 
 ### 9.5 Storage (`storage.test.mjs`)
 
@@ -472,6 +514,11 @@ Run `start()` against a sample in jsdom, with an in-memory storage adapter.
   - visits only campaigns whose rewards are unknown
   - stores what it reads
   - can be cancelled midway, keeping what it learned
+- **Sorting:**
+  - With the default "Newest first", each section's container has `tres-sorted`, and its campaigns' `style.order` values follow `sortCampaigns`.
+  - No element is moved: the DOM order of campaign roots is unchanged.
+  - Switching to "Twitch order" removes the class and every `order` value.
+  - The choice survives a restart.
 
 ## 10. Known mistakes to avoid
 
