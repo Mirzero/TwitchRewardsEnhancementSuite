@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitch Drops Campaign Filters
 // @namespace    https://github.com/Mirzero/TwitchRewardsEnhancementSuite
-// @version      0.6.0
+// @version      0.7.0
 // @description  Hide Twitch Drops campaigns you don't care about or have already finished.
 // @author       Mirzero
 // @homepageURL  https://github.com/Mirzero/TwitchRewardsEnhancementSuite
@@ -787,7 +787,7 @@
 		hideClosed.input.addEventListener('change', () => actions.setRule('hideClosed', hideClosed.input.checked));
 		hideUpcoming.input.addEventListener('change', () => actions.setRule('hideUpcoming', hideUpcoming.input.checked));
 		showHidden.input.addEventListener('change', () => actions.setRule('showHidden', showHidden.input.checked));
-		const visibility = section(doc, 'Visibility', true, hideClosed.label, hideUpcoming.label, showHidden.label);
+		const visibility = section(doc, 'Visibility', false, hideClosed.label, hideUpcoming.label, showHidden.label);
 
 		// Sorting (spec §4.6)
 		const sortInputs = SORT_OPTIONS.map(([key, text]) => {
@@ -800,7 +800,7 @@
 			label.append(input, element(doc, 'span', '', text));
 			return { label, input };
 		});
-		const sorting = section(doc, 'Sorting', true, ...sortInputs.map(({ label }) => label));
+		const sorting = section(doc, 'Sorting', false, ...sortInputs.map(({ label }) => label));
 
 		// Rewards
 		const rewardsKnown = element(doc, 'p', 'tres-note');
@@ -814,7 +814,7 @@
 		const loaderRow = element(doc, 'div', 'tres-row');
 		loaderRow.append(loadButton, rereadButton, cancelButton);
 		const loaderStatus = element(doc, 'p', 'tres-status');
-		const rewards = section(doc, 'Rewards', true, rewardsKnown, loaderRow, loaderStatus, rewardTypes.element, rewardsNote);
+		const rewards = section(doc, 'Rewards', false, rewardsKnown, loaderRow, loaderStatus, rewardTypes.element, rewardsNote);
 
 		// Open / Closed groups. Hide rules apply everywhere, so both groups show the same state.
 		const makeGroup = (name, open) => {
@@ -823,12 +823,12 @@
 			const details = section(doc, name, open, publishers.element, games.element);
 			return { element: details, summary: details.firstElementChild, publishers, games };
 		};
-		const openGroup = makeGroup('Open campaigns', true);
+		const openGroup = makeGroup('Open campaigns', false);
 		const closedGroup = makeGroup('Closed campaigns', false);
 
 		// Hidden campaigns
 		const hiddenList = element(doc, 'ul', 'tres-options tres-hidden-list');
-		const hiddenSection = section(doc, 'Hidden campaigns', true, hiddenList);
+		const hiddenSection = section(doc, 'Hidden campaigns', false, hiddenList);
 		hiddenList.addEventListener('click', (event) => {
 			const target = event.target.closest('button[data-id]');
 			if (target) actions.unhideCampaign(target.dataset.id);
@@ -837,7 +837,7 @@
 		// Claimed rewards
 		const claimedLine = element(doc, 'p', 'tres-note');
 		const clearClaims = button(doc, 'Clear marks for campaigns no longer listed', () => actions.clearOrphanClaims());
-		const claimedSection = section(doc, 'Claimed rewards', true, claimedLine, clearClaims);
+		const claimedSection = section(doc, 'Claimed rewards', false, claimedLine, clearClaims);
 
 		// Backup
 		const backupLine = element(doc, 'p', 'tres-note');
@@ -857,7 +857,7 @@
 			button(doc, 'Import', () => fileInput.click()),
 			button(doc, 'Reset all', () => setStatus(backupStatus, actions.resetAll()))
 		);
-		const backupSection = section(doc, 'Backup', true, backupLine, backupRow, fileInput, backupStatus);
+		const backupSection = section(doc, 'Backup', false, backupLine, backupRow, fileInput, backupStatus);
 
 		// Diagnostics
 		const diagList = element(doc, 'ul', 'tres-diag');
@@ -977,7 +977,7 @@
 		};
 	}
 
-	/** A collapsible panel section; `open` sets whether it starts expanded. */
+	/** A collapsible panel section; `open` sets whether it starts expanded (all start collapsed, spec §4.3). */
 	function section(doc, title, open, ...children) {
 		const node = element(doc, 'details', 'tres-section');
 		node.open = open;

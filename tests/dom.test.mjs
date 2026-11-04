@@ -390,12 +390,12 @@ test('the panel stays open while the loader runs', async () => {
 	}, { storage: storageKnowingAllBut(['Enshrouded']), prepare: (document) => stubTwitchAccordion(document, clicks), loaderPollMs: 5 });
 });
 
-test('every panel section is collapsible, with Closed campaigns and Diagnostics starting collapsed', async () => {
+test('every panel section is collapsible and starts collapsed', async () => {
 	await withScript('page_source_default.html', ({ document }) => {
 		const sections = [...document.querySelectorAll('#tres-panel .tres-body > details')].map((d) => [d.querySelector('summary').textContent.replace(/ \(\d+\)$/, ''), d.open]);
 		assert.deepEqual(sections, [
-			['Visibility', true], ['Sorting', true], ['Rewards', true], ['Open campaigns', true], ['Closed campaigns', false],
-			['Hidden campaigns', true], ['Claimed rewards', true], ['Backup', true], ['Diagnostics', false]
+			['Visibility', false], ['Sorting', false], ['Rewards', false], ['Open campaigns', false], ['Closed campaigns', false],
+			['Hidden campaigns', false], ['Claimed rewards', false], ['Backup', false], ['Diagnostics', false]
 		]);
 		assert.equal(document.querySelectorAll('#tres-panel .tres-body > div.tres-section').length, 0, 'no fixed sections left');
 	});

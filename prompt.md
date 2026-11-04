@@ -227,7 +227,7 @@ A campaign is hidden if **any** rule matches it. Every rule is persisted.
 - **Expanded size:** at most 380px wide and `calc(100vh - 7rem)` tall, scrolling internally. While expanded, it may overlap the page.
 - **Style:** match Twitch's dark theme.
 
-**Contents, top to bottom.** Below the summary line, **every section is collapsible** (a `<details>` with its title as the `<summary>`). Each starts open unless noted otherwise.
+**Contents, top to bottom.** Below the summary line, **every section is collapsible** (a `<details>` with its title as the `<summary>`). **Every section starts collapsed**, so the expanded panel opens as a compact list of section titles and the user opens only what they need.
 
 - **Summary line:** "{visible} shown · {hidden} hidden · {total} campaigns ({closed} closed)". Not collapsible.
 - **Visibility:**
@@ -242,13 +242,12 @@ A campaign is hidden if **any** rule matches it. Every rule is persisted.
 - **Open campaigns** and **Closed campaigns:** two separate groups, so Closed entries don't clutter the Open lists.
   - Each group has a Publishers list and a Games list ("Game — Publisher"). Each entry shows its campaign count in that group and a hide toggle. Each list has a text box that filters it, and is sorted by name.
   - Hide rules apply everywhere (§4.1). So toggling a game or publisher in either group toggles it in both, and the two groups always show the same state.
-  - The Closed group starts collapsed.
 - **Hidden campaigns:** a list of campaigns hidden by rule 2, each with an "unhide" button. It includes campaigns no longer on the page.
 - **Claimed rewards:** the count, plus a "clear claimed marks for campaigns that are no longer listed" button.
 - **Backup:**
   - Export and Import buttons, plus "last backup: N days ago" (§5).
   - A **Reset all** button, which asks for confirmation. It resets the hide rules and toggles to the §4.1 defaults and clears claimed marks, but **keeps learned rewards**, since those are a cache, not settings.
-- **Diagnostics** (§7), which starts collapsed.
+- **Diagnostics** (§7).
 
 **Rules for the controls:**
 
@@ -509,7 +508,7 @@ Run `start()` against a sample in jsdom, with an in-memory storage adapter.
 - **Header buttons:** exactly one Hide button is injected per header. Running a second scan doesn't duplicate them.
 - **No loop:** after a scan, hiding a campaign triggers no further scans.
 - **Header button clicks:** clicking the Hide button doesn't change the header button's `aria-expanded`.
-- **Panel:** it starts collapsed. Clicking the pill expands it, and a click outside collapses it.
+- **Panel:** it starts collapsed. Clicking the pill expands it, and a click outside collapses it. Every section inside it starts collapsed.
 - **Rewards loader:** using a sample whose bodies are already loaded, or a stub that fills a body when a header is clicked, the loader:
   - visits only campaigns whose rewards are unknown
   - stores what it reads
