@@ -203,14 +203,15 @@ A campaign is hidden if **any** rule matches it. Every rule is persisted.
 
 ### 4.2 Controls on the page
 
-- **Campaign header:** inject a small **Hide** button into each `.accordion-header`, **outside** its `<button>`, so clicking it never opens or closes the campaign.
-  - Place it in the header's **top-right corner** (about 3px from the top and right edges), small (11px text, 16px tall) and slightly faded until hovered.
-  - It must not sit over the date text or the expand chevron. (An earlier version centred it vertically beside the chevron, and it covered both.)
-  - In show-hidden mode, the "hidden: {reason}" label sits beside it.
-  - It opens a small menu with three choices:
-  - Hide this campaign
-  - Hide all {Game}
-  - Hide all from {Publisher}
+- **Campaign header:** inject two small buttons into each `.accordion-header`, **outside** its `<button>`, so clicking them never opens or closes the campaign:
+  - **Hide** hides **just this campaign, immediately**, with no menu (rule 2). If the campaign is already hidden by rule 2, which can only be seen in show-hidden mode, the button reads **Unhide** and unhides it.
+  - **⋯** opens a small menu with the wider options, each labelled Hide or Unhide to match its current state:
+    - Hide all {Game}
+    - Hide all from {Publisher}
+  - (An earlier version had a single "Hide ▾" button whose menu also held "Hide this campaign". The owner split it so the common action takes one click.)
+  - Place the buttons together in the header's **top-right corner** (about 3px from the top and right edges), small (11px text, 16px tall) and slightly faded until hovered.
+  - They must not sit over the date text or the expand chevron. (An earlier version centred the button vertically beside the chevron, and it covered both.)
+  - In show-hidden mode, the "hidden: {reason}" label sits beside them.
 - **Reward tiles:** when a body is loaded, add a **"✓ Claimed"** toggle to each reward tile. Dim tiles that are done, and label them "claimed" or "hidden type: Badge".
 - Mark every injected element with `data-tres`, and never inject it twice.
 
@@ -222,10 +223,11 @@ A campaign is hidden if **any** rule matches it. Every rule is persisted.
 - **Collapsed state:** the default. A small pill shows "TRES · {hidden} hidden". It's a minimal intrusion, and it must not cover any campaign header's controls at widths of 1280px and up.
 - **Opening and closing:**
   - Clicking the pill expands the full panel.
-  - The panel collapses again when the user clicks anywhere outside it, presses Esc, or clicks its collapse button.
-  - It must **not** collapse while one of its inputs has focus, or while the rewards loader is running. While the loader runs, the pill shows its progress.
+  - It collapses **only** when the user clicks its collapse button ("–") or presses Esc.
+  - **Clicks outside the panel never collapse it**, whether on Twitch's page, on the TRES header buttons or pills, or anywhere else, so the user can work the page with the panel open. (An earlier version also collapsed on any outside click; the owner removed that.)
+  - While the rewards loader runs, the collapsed pill shows its progress.
 - **Expanded size:** at most 380px wide and `calc(100vh - 7rem)` tall, scrolling internally. While expanded, it may overlap the page.
-- **Style:** match Twitch's dark theme.
+- **Style:** match Twitch's dark theme, with the TRES brand border (§4.7).
 
 **Contents, top to bottom.** Below the summary line, **every section is collapsible** (a `<details>` with its title as the `<summary>`). **Every section starts collapsed**, so the expanded panel opens as a compact list of section titles and the user opens only what they need.
 
@@ -257,7 +259,16 @@ A campaign is hidden if **any** rule matches it. Every rule is persisted.
 ### 4.4 How hiding works
 
 - Hide the campaign root with a single class: `tres-hidden { display:none !important }`. Use `tres-dimmed` in show-hidden mode.
-- If every campaign in a section is hidden, append a note under that section's `<h4>`, such as "18 hidden". Don't hide the `<h4>` itself.
+- **Hidden counter beside each section heading:** whenever at least one campaign in a section is hidden (for any reason, including in show-hidden mode), show a small pill reading "{N} hidden" beside that section's `<h4>`, e.g. "Open Drop Campaigns  [3 hidden]". Its tooltip reads "{N} of {total} campaigns in this section are hidden". Remove the counter when nothing in the section is hidden. Never hide the `<h4>` itself.
+  - Insert the counter as the `<h4>`'s **next sibling**, never inside it. The extractor reads the heading's text to recognise the section (§2.1), so text added inside it would break recognition.
+  - To put the counter on the same line, give the `<h4>` the class `tres-counted` (`display:inline-block`), and remove the class when the counter goes.
+  - (This replaced an earlier note under the heading that appeared only when every campaign in the section was hidden.)
+- **The counter reflects show-hidden mode:** it reads "{N} hidden" normally and "{N} dimmed" while "Show hidden campaigns (dimmed)" is on.
+- **On Open sections (Open Drop, Open Reward) the counter is a button** that toggles "Show hidden campaigns (dimmed)", the same global setting as the panel checkbox, which follows it.
+  - Its tooltip says what a click does ("Click to show them dimmed" / "Click to hide them again"), and `aria-pressed` reflects the state.
+  - Clicks are handled in the capture phase like the header buttons, so they never reach Twitch.
+  - The Closed section's counter stays a plain, non-clickable counter, though its text still follows the mode.
+  - (The owner considered per-section Show/Hide/Dimmed controls for Open, Closed and Upcoming, then dropped them. Upcoming campaigns sit under Twitch's Open heading, and "hide all open campaigns" means nothing useful, so per-section modes would conflict. The single global toggle is deliberate.)
 
 ### 4.5 Rewards: learning, storing and loading
 
@@ -298,6 +309,9 @@ The user can choose the order of campaigns **within each section**. Open and Clo
 | `game` | Game A–Z | Game name, then publisher |
 | `publisher` | Publisher A–Z | Publisher, then game name |
 
+- **Visibility first, then the sort option.** While "Show hidden campaigns (dimmed)" is on, each section becomes two groups: visible campaigns first, then dimmed ones. Each group is ordered by the chosen option. (`displayOrder(campaigns, sortBy, isDimmed)` is a pure function exported for tests.)
+  - This applies to "Twitch order" too: while anything in a section is dimmed, that section is reordered so the dimmed campaigns sink to the bottom, with both groups in Twitch's order. When nothing in a section is dimmed, Twitch order removes all of TRES's ordering from it, as before.
+  - Fully hidden campaigns (`display:none`) don't affect what you see, so with show-hidden off the plain sort applies.
 - **Ties and missing values:** break ties by Twitch's order, so sorting is stable. A campaign whose dates didn't parse sorts after the dated ones. Compare names with `localeCompare`, ignoring case.
 - **Sort visually, never move elements.** Moving Twitch's nodes would conflict with how Twitch's own code manages the page, which could undo the order or break opening and closing. Instead:
   - Give each section's container (the shared parent of its campaign roots, §2.4) the class `tres-sorted`, styled `display:flex; flex-direction:column`.
@@ -307,6 +321,21 @@ The user can choose the order of campaigns **within each section**. Open and Clo
 - **When to apply:** re-apply the order whenever rules are applied (after each scan and each change of setting), so new campaigns and re-rendered sections are sorted too.
 - **Known side effect:** keyboard Tab order and screen readers still follow Twitch's DOM order, not the visual order.
 - **Cleanup:** when the script stops (leaving the page, or "unrecognised page"), remove `tres-sorted` and every `order` value it set.
+
+### 4.7 Branding
+
+Everything TRES injects into Twitch's page is visibly TRES's, never bare text that looks like part of Twitch.
+
+- **Brand colour:** `#99FF33`, defined once as a constant (`BRAND_COLOR`) and used for the 1px border of every injected element.
+- **Small injected elements are pills** (`border-radius: 999px`) with the brand border:
+  - the collapsed panel pill ("TRES · N hidden")
+  - the section hidden counters beside Twitch's headings (§4.4)
+  - the header **Hide** and **⋯** buttons, and the "hidden: {reason}" label (§4.2)
+  - the reward tiles' **Claimed** toggle and "hidden type: …" note (§4.2)
+- **Larger containers keep their rounded-rectangle shape** but use the brand border: the expanded panel and the ⋯ menu.
+- **Only the border is branded.** Backgrounds, text colours, fonts and the contents of the expanded panel stay as they are.
+- Hover states change opacity only, never the border colour, so the brand colour is always visible.
+- Any new injected element must follow these rules.
 
 ## 5. Persistence
 
@@ -491,6 +520,7 @@ These use the opencampaigns model.
   - `ending` puts the earliest end first.
   - `game` and `publisher` are alphabetical, ignoring case.
   - Ties keep Twitch's order, and undated campaigns go last.
+  - `displayOrder` puts visible campaigns before dimmed ones, each group in sort order (including `twitch`). With nothing dimmed, it equals the plain sort.
 
 ### 9.5 Storage (`storage.test.mjs`)
 
@@ -505,10 +535,24 @@ These use the opencampaigns model.
 Run `start()` against a sample in jsdom, with an in-memory storage adapter.
 
 - **Hiding:** with the defaults, exactly 18 campaign roots get `tres-hidden`.
-- **Header buttons:** exactly one Hide button is injected per header. Running a second scan doesn't duplicate them.
+- **Branding:** reading the injected stylesheet, every pill element in §4.7 has `border:1px solid #99ff33` and `border-radius:999px`, and the expanded panel and the ⋯ menu have the brand border. Every `tres-` class on an injected element is covered by one of those rules.
+- **Section counters:**
+  - With the defaults, only "Closed Drop Campaigns" has a counter, reading "18 hidden".
+  - Hiding one Open campaign adds "1 hidden" beside "Open Drop Campaigns"; unhiding it removes that counter and the heading's `tres-counted` class.
+  - The counter stays in show-hidden mode and reads "dimmed".
+  - Clicking the Open counter turns show-hidden mode on (the panel checkbox follows, the counters read "dimmed", and nothing in Twitch toggles); clicking again turns it off. The Closed counter is not a button.
+  - A full rescan with counters present still recognises every heading.
+  - Leaving the page removes all counters.
+- **Header buttons:** exactly one Hide button and one ⋯ button are injected per header. Running a second scan doesn't duplicate them.
 - **No loop:** after a scan, hiding a campaign triggers no further scans.
-- **Header button clicks:** clicking the Hide button doesn't change the header button's `aria-expanded`.
-- **Panel:** it starts collapsed. Clicking the pill expands it, and a click outside collapses it. Every section inside it starts collapsed.
+- **Header button clicks:** clicking Hide or ⋯ doesn't change the header button's `aria-expanded`, and neither click reaches the page.
+- **Hide acts at once:** clicking Hide hides that campaign without opening a menu. In show-hidden mode it then reads Unhide and reverses it.
+- **⋯ menu:** it offers exactly "Hide all {Game}" and "Hide all from {Publisher}", or their Unhide forms.
+- **Panel:**
+  - It starts collapsed, and every section inside it starts collapsed.
+  - Clicking the pill expands it.
+  - Clicks outside it, including on Twitch's content and the TRES header buttons, leave it open.
+  - The "–" button and Esc collapse it.
 - **Rewards loader:** using a sample whose bodies are already loaded, or a stub that fills a body when a header is clicked, the loader:
   - visits only campaigns whose rewards are unknown
   - stores what it reads
@@ -518,6 +562,9 @@ Run `start()` against a sample in jsdom, with an in-memory storage adapter.
   - No element is moved: the DOM order of campaign roots is unchanged.
   - Switching to "Twitch order" removes the class and every `order` value.
   - The choice survives a restart.
+  - **Dimmed campaigns sink to the bottom:**
+    - With Rise Online and ARC Raiders hidden and show-hidden on, they are the last two in the Open section (newest first), and the rest keep newest-first order. With show-hidden off, the plain sort applies.
+    - Under "Twitch order", a hidden but not dimmed campaign leaves the section untouched. Dimming it moves it to the bottom, with the rest in Twitch order. Turning show-hidden off removes the ordering again.
 
 ## 10. Known mistakes to avoid
 
@@ -570,11 +617,12 @@ This is **not** for this version; it's recorded so the design leaves room for it
    - Spot-check three campaigns against what's on screen.
    - Open and close a campaign, and confirm its ID, rewards and hide state don't change.
    - Confirm Closed campaigns are hidden on first install, then toggle "Hide closed".
-   - Check that the collapsed pill doesn't cover any campaign controls, that it expands on click, and that it collapses on an outside click or Esc.
+   - Check that the collapsed pill doesn't cover any campaign controls, that it expands on click, that it stays open while you click around the page, and that "–" or Esc collapses it.
    - Run Load all rewards, then reload and confirm the "rewards known" count stays and a second run has nothing to do.
    - Hide the Badge type and confirm the badge-only campaigns disappear.
    - Mark every reward in a campaign claimed and confirm the campaign hides.
-   - Hide a game that has both an Open and a Closed campaign, turn Hide closed off, and confirm both stay hidden.
+   - Click a campaign's Hide button and confirm it disappears at once, with no menu.
+   - Using ⋯, hide a game that has both an Open and a Closed campaign, turn Hide closed off, and confirm both stay hidden.
    - Reload and confirm everything stays hidden.
    - Export, Reset, Import, and confirm the state comes back.
    - Navigate away within Twitch and back, and confirm the panel returns.

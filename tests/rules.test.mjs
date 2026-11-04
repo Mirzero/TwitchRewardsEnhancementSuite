@@ -144,3 +144,12 @@ test('ties keep Twitch order and undated campaigns go last', () => {
 	assert.deepEqual(tres.sortCampaigns(list, 'ending').map((c) => c.game), ['b', 'c', 'd', 'a']);
 	assert.deepEqual(tres.sortCampaigns(list, 'publisher').map((c) => c.game), ['a', 'b', 'c', 'd']);
 });
+
+test('displayOrder puts visible campaigns first and dimmed ones last, each group in sort order', () => {
+	const make = (game, start, dimmed) => ({ game, publisher: 'P', start, end: start, dimmed });
+	const list = [make('a', 1, false), make('b', 2, true), make('c', 3, false), make('d', 4, true)];
+	const order = (sortBy) => tres.displayOrder(list, sortBy, (c) => c.dimmed).map((c) => c.game);
+	assert.deepEqual(order('newest'), ['c', 'a', 'd', 'b']);
+	assert.deepEqual(order('twitch'), ['a', 'c', 'b', 'd']);
+	assert.deepEqual(tres.displayOrder(list, 'newest', () => false).map((c) => c.game), ['d', 'c', 'b', 'a'], 'nothing dimmed: plain sort');
+});

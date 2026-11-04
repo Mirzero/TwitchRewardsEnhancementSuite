@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitch Drops Campaign Filters
 // @namespace    https://github.com/Mirzero/TwitchRewardsEnhancementSuite
-// @version      0.7.0
+// @version      0.8.0
 // @description  Hide Twitch Drops campaigns you don't care about or have already finished.
 // @author       Mirzero
 // @homepageURL  https://github.com/Mirzero/TwitchRewardsEnhancementSuite
@@ -22,6 +22,8 @@
 	// =====================================================================
 
 	const LOG_PREFIX = '[TRES Drop Campaigns]';
+	// Brand colour: the border of everything TRES injects into Twitch's page (spec §4.7).
+	const BRAND_COLOR = '#99ff33';
 	const STORAGE_KEY = 'tresDropCampaigns.v2';
 	const SCHEMA = 2;
 	const CAMPAIGNS_PATH = '/drops/campaigns';
@@ -609,6 +611,16 @@
 		return indexed.map(({ campaign }) => campaign);
 	}
 
+	/**
+	 * Final display order within a section (spec §4.6): visibility first, then the sort option.
+	 * Visible campaigns come first and dimmed ones last, each group in `sortBy` order.
+	 */
+	function displayOrder(campaigns, sortBy, isDimmed) {
+		const visible = campaigns.filter((campaign) => !isDimmed(campaign));
+		const dimmed = campaigns.filter((campaign) => isDimmed(campaign));
+		return [...sortCampaigns(visible, sortBy), ...sortCampaigns(dimmed, sortBy)];
+	}
+
 	function gmStorage() {
 		return {
 			read: () => GM_getValue(STORAGE_KEY, null),
@@ -631,9 +643,9 @@
 	const PANEL_CSS = `
 #tres-panel{position:fixed;top:calc(5rem + 8px);right:16px;z-index:1000;font:13px/1.4 Inter,Roobert,'Helvetica Neue',Helvetica,Arial,sans-serif;color:#efeff1}
 #tres-panel *,#tres-menu *{box-sizing:border-box}
-#tres-panel .tres-pill{display:block;margin-left:auto;padding:4px 10px;border:1px solid #3d3d42;border-radius:999px;background:#18181b;color:#efeff1;font:inherit;font-weight:600;cursor:pointer;opacity:.85}
-#tres-panel .tres-pill:hover{opacity:1;border-color:#a970ff}
-#tres-panel .tres-body{width:min(380px,calc(100vw - 32px));max-height:calc(100vh - 7rem);overflow:auto;padding:12px;border:1px solid #3d3d42;border-radius:6px;background:#18181b;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+#tres-panel .tres-pill{display:block;margin-left:auto;padding:4px 10px;border:1px solid ${BRAND_COLOR};border-radius:999px;background:#18181b;color:#efeff1;font:inherit;font-weight:600;cursor:pointer;opacity:.85}
+#tres-panel .tres-pill:hover{opacity:1}
+#tres-panel .tres-body{width:min(380px,calc(100vw - 32px));max-height:calc(100vh - 7rem);overflow:auto;padding:12px;border:1px solid ${BRAND_COLOR};border-radius:6px;background:#18181b;box-shadow:0 8px 24px rgba(0,0,0,.5)}
 #tres-panel[data-expanded="false"] .tres-body{display:none}
 #tres-panel[data-expanded="true"] .tres-pill{display:none}
 #tres-panel .tres-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
@@ -666,16 +678,19 @@
 .drops-root__content .tres-dimmed:hover{opacity:.75}
 .drops-root__content .accordion-header{position:relative}
 .drops-root__content .tres-controls{position:absolute;top:3px;right:3px;display:flex;gap:4px;align-items:center;z-index:1;line-height:16px}
-.drops-root__content .tres-reason{padding:0 6px;border-radius:3px;background:#5c1a1a;color:#ffd4d4;font-size:11px}
-.drops-root__content .tres-hide-btn{padding:0 6px;border:1px solid #3d3d42;border-radius:3px;background:#18181b;color:#efeff1;font-size:11px;line-height:16px;cursor:pointer;opacity:.6}
-.drops-root__content .tres-hide-btn:hover{opacity:1;border-color:#a970ff}
+.drops-root__content .tres-reason{padding:0 6px;border:1px solid ${BRAND_COLOR};border-radius:999px;background:#5c1a1a;color:#ffd4d4;font-size:11px}
+.drops-root__content .tres-hide-btn,.drops-root__content .tres-more-btn{padding:0 8px;border:1px solid ${BRAND_COLOR};border-radius:999px;background:#18181b;color:#efeff1;font-size:11px;line-height:16px;cursor:pointer;opacity:.6}
+.drops-root__content .tres-hide-btn:hover,.drops-root__content .tres-more-btn:hover{opacity:1}
 .drops-root__content .drop-benefit__image-container{position:relative}
-.drops-root__content .tres-claim{position:absolute;top:2px;right:2px;display:flex;gap:3px;align-items:center;padding:1px 4px;border-radius:4px;background:rgba(14,14,16,.85);color:#efeff1;font-size:11px;cursor:pointer;z-index:1}
+.drops-root__content .tres-claim{position:absolute;top:2px;right:2px;display:flex;gap:3px;align-items:center;padding:1px 6px;border:1px solid ${BRAND_COLOR};border-radius:999px;background:rgba(14,14,16,.85);color:#efeff1;font-size:11px;cursor:pointer;z-index:1}
 .drops-root__content .tres-claim input{margin:0}
 .drops-root__content [data-tres-done]{opacity:.45}
-.drops-root__content .tres-done-reason{position:absolute;bottom:2px;left:2px;padding:0 4px;border-radius:4px;background:rgba(14,14,16,.85);color:#adadb8;font-size:11px}
-.drops-root__content .tres-section-note{margin:2px 0 6px;color:#adadb8;font-size:12px}
-#tres-menu{position:fixed;z-index:1001;min-width:200px;padding:4px;border:1px solid #3d3d42;border-radius:6px;background:#18181b;box-shadow:0 8px 24px rgba(0,0,0,.5);font:13px/1.4 Inter,Roobert,'Helvetica Neue',Helvetica,Arial,sans-serif}
+.drops-root__content .tres-done-reason{position:absolute;bottom:2px;left:2px;padding:0 6px;border:1px solid ${BRAND_COLOR};border-radius:999px;background:rgba(14,14,16,.85);color:#adadb8;font-size:11px}
+.drops-root__content h4.tres-counted{display:inline-block}
+.drops-root__content .tres-section-count{display:inline-block;margin-left:8px;padding:0 8px;border:1px solid ${BRAND_COLOR};border-radius:999px;background:transparent;color:#adadb8;font-family:inherit;font-size:12px;line-height:18px;vertical-align:middle}
+.drops-root__content button.tres-section-count{cursor:pointer}
+.drops-root__content button.tres-section-count:hover{color:#efeff1}
+#tres-menu{position:fixed;z-index:1001;min-width:200px;padding:4px;border:1px solid ${BRAND_COLOR};border-radius:6px;background:#18181b;box-shadow:0 8px 24px rgba(0,0,0,.5);font:13px/1.4 Inter,Roobert,'Helvetica Neue',Helvetica,Arial,sans-serif}
 #tres-menu button{display:block;width:100%;padding:5px 8px;border:0;border-radius:4px;background:none;color:#efeff1;font:inherit;text-align:left;cursor:pointer}
 #tres-menu button:hover{background:#3d3d42}
 `;
@@ -876,15 +891,10 @@
 			panel.dataset.expanded = String(expanded);
 		}
 		pill.addEventListener('click', () => setExpanded(true));
-		// Stays open while the user is typing or the rewards loader is running (spec §4.3).
-		let busy = false;
-		const onMouseDown = (event) => {
-			if (panel.dataset.expanded === 'true' && !busy && !panel.contains(event.target) && !isTextInputFocused(doc, panel)) setExpanded(false);
-		};
+		// Clicks outside the panel never collapse it (spec §4.3); only "–" or Esc does.
 		const onKeyDown = (event) => {
 			if (event.key === 'Escape' && panel.dataset.expanded === 'true') setExpanded(false);
 		};
-		doc.addEventListener('mousedown', onMouseDown, true);
 		doc.addEventListener('keydown', onKeyDown, true);
 
 		// Never rebuild while the user is typing in the panel; flush once focus leaves.
@@ -905,7 +915,6 @@
 			pendingView = null;
 			const c = view.counts;
 			const loader = view.loader;
-			busy = loader.running;
 			pill.textContent = !view.found ? 'TRES'
 				: !view.recognized ? 'TRES · !'
 					: loader.running ? `TRES · loading ${loader.done}/${loader.total}`
@@ -969,7 +978,6 @@
 				else render(view);
 			},
 			destroy() {
-				doc.removeEventListener('mousedown', onMouseDown, true);
 				doc.removeEventListener('keydown', onKeyDown, true);
 				panel.remove();
 				style.remove();
@@ -1071,8 +1079,11 @@
 		};
 	}
 
-	/** Adds (once) the Hide button and reason label to a campaign header. */
-	function decorateHeader(doc, campaign, reason, showHidden) {
+	/**
+	 * Adds (once) the header controls (spec §4.2): a Hide button that hides just this campaign,
+	 * a "⋯" button for the game/publisher options, and the show-hidden reason label.
+	 */
+	function decorateHeader(doc, campaign, reason, showHidden, hiddenByRule) {
 		const header = campaign.rootEl.firstElementChild;
 		let controls = header.querySelector(':scope > .tres-controls');
 		if (!controls) {
@@ -1080,14 +1091,21 @@
 			controls.setAttribute('data-tres', 'controls');
 			const reasonLabel = element(doc, 'span', 'tres-reason');
 			reasonLabel.hidden = true;
-			const hideButton = element(doc, 'button', 'tres-hide-btn', 'Hide ▾');
+			const hideButton = element(doc, 'button', 'tres-hide-btn');
 			hideButton.type = 'button';
-			hideButton.title = 'Hide this campaign, game or publisher';
-			controls.append(reasonLabel, hideButton);
+			const moreButton = element(doc, 'button', 'tres-more-btn', '⋯');
+			moreButton.type = 'button';
+			moreButton.title = 'More: hide all campaigns for this game or publisher';
+			moreButton.setAttribute('aria-label', 'More hide options');
+			controls.append(reasonLabel, hideButton, moreButton);
 			header.appendChild(controls);
 		}
 		const hideButton = controls.querySelector('.tres-hide-btn');
+		const hideText = hiddenByRule ? 'Unhide' : 'Hide';
+		if (hideButton.textContent !== hideText) hideButton.textContent = hideText;
+		hideButton.title = hiddenByRule ? 'Unhide this campaign' : 'Hide this campaign';
 		hideButton.dataset.campaignId = campaign.id;
+		controls.querySelector('.tres-more-btn').dataset.campaignId = campaign.id;
 		const reasonLabel = controls.querySelector('.tres-reason');
 		const text = reason && showHidden ? `hidden: ${REASON_LABELS[reason]}` : '';
 		if (reasonLabel.textContent !== text) reasonLabel.textContent = text;
@@ -1131,9 +1149,11 @@
 
 	/**
 	 * Orders each section's campaigns visually with CSS `order` on a flex container, never by
-	 * moving Twitch's nodes (spec §4.6). "twitch" removes our ordering entirely.
+	 * moving Twitch's nodes (spec §4.6). Dimmed campaigns go to the bottom; "twitch" order with
+	 * nothing dimmed in a section removes our ordering from it entirely.
 	 */
-	function applySort(result, sortBy) {
+	function applySort(result, sortBy, reasons, showHidden) {
+		const isDimmed = (campaign) => showHidden && Boolean(reasons.get(campaign.id));
 		const containers = new Map();
 		for (const campaign of result.campaigns) {
 			const container = campaign.rootEl.parentElement;
@@ -1142,12 +1162,12 @@
 			containers.get(container).push(campaign);
 		}
 		for (const [container, campaigns] of containers) {
-			if (sortBy === 'twitch') {
+			if (sortBy === 'twitch' && !campaigns.some(isDimmed)) {
 				clearSort(container);
 				continue;
 			}
 			container.classList.add('tres-sorted');
-			sortCampaigns(campaigns, sortBy).forEach((campaign, index) => {
+			displayOrder(campaigns, sortBy, isDimmed).forEach((campaign, index) => {
 				if (campaign.rootEl.style.order !== String(index)) campaign.rootEl.style.order = String(index);
 			});
 		}
@@ -1162,28 +1182,45 @@
 	function clearDecorations(content) {
 		if (!content) return;
 		for (const container of content.querySelectorAll('.tres-sorted')) clearSort(container);
+		for (const heading of content.querySelectorAll('h4.tres-counted')) heading.classList.remove('tres-counted');
 		for (const node of content.querySelectorAll('[data-tres]')) node.remove();
 		for (const node of content.querySelectorAll('.tres-hidden, .tres-dimmed')) node.classList.remove('tres-hidden', 'tres-dimmed');
 		for (const node of content.querySelectorAll('[data-tres-done]')) node.removeAttribute('data-tres-done');
 	}
 
-	/** Shows "N hidden" under a section heading when every campaign in it is hidden (spec §4.4). */
-	function updateSectionNotes(doc, result, reasons, showHidden) {
+	/**
+	 * Shows "N hidden" (or "N dimmed" in show-hidden mode) beside each section heading that has
+	 * hidden campaigns (spec §4.4). On Open sections the counter is a button that toggles
+	 * show-hidden mode. The counter is the heading's next sibling, never inside the <h4>, so the
+	 * heading text the extractor reads is unchanged; `tres-counted` puts the two on one line.
+	 */
+	function updateSectionCounts(doc, result, reasons, showHidden) {
 		for (const { type, heading } of result.sections) {
 			const inSection = result.campaigns.filter((campaign) => campaign.type === type);
 			const hidden = inSection.filter((campaign) => reasons.get(campaign.id)).length;
-			let note = heading.nextElementSibling && heading.nextElementSibling.matches('.tres-section-note') ? heading.nextElementSibling : null;
-			const text = !showHidden && inSection.length && hidden === inSection.length ? `${hidden} hidden` : '';
-			if (!text) {
-				if (note) note.remove();
+			const toggles = type !== CLOSED_TYPE;
+			let counter = heading.nextElementSibling && heading.nextElementSibling.matches('.tres-section-count') ? heading.nextElementSibling : null;
+			if (counter && (counter.tagName === 'BUTTON') !== toggles) {
+				counter.remove();
+				counter = null;
+			}
+			if (!hidden) {
+				if (counter) counter.remove();
+				heading.classList.remove('tres-counted');
 				continue;
 			}
-			if (!note) {
-				note = element(doc, 'p', 'tres-section-note');
-				note.setAttribute('data-tres', 'section-note');
-				heading.after(note);
+			if (!counter) {
+				counter = element(doc, toggles ? 'button' : 'span', 'tres-section-count');
+				counter.setAttribute('data-tres', 'section-count');
+				if (toggles) counter.type = 'button';
+				heading.after(counter);
 			}
-			if (note.textContent !== text) note.textContent = text;
+			heading.classList.add('tres-counted');
+			const text = `${hidden} ${showHidden ? 'dimmed' : 'hidden'}`;
+			if (counter.textContent !== text) counter.textContent = text;
+			const summary = `${hidden} of ${inSection.length} campaigns in this section are ${showHidden ? 'hidden, shown dimmed' : 'hidden'}`;
+			counter.title = toggles ? `${summary}. Click to ${showHidden ? 'hide them again' : 'show them dimmed'}.` : summary;
+			if (toggles) counter.setAttribute('aria-pressed', String(showHidden));
 		}
 	}
 
@@ -1374,12 +1411,12 @@
 				if (!enabled) continue;
 				campaign.rootEl.classList.toggle('tres-hidden', Boolean(reason) && !rules.showHidden);
 				campaign.rootEl.classList.toggle('tres-dimmed', Boolean(reason) && rules.showHidden);
-				decorateHeader(doc, campaign, reason, rules.showHidden);
+				decorateHeader(doc, campaign, reason, rules.showHidden, Boolean(rules.hiddenCampaigns[campaign.id]));
 				decorateTiles(doc, campaign, rules, claimed);
 			}
 			if (enabled) {
-				updateSectionNotes(doc, result, state.reasons, rules.showHidden);
-				applySort(result, rules.sortBy);
+				updateSectionCounts(doc, result, state.reasons, rules.showHidden);
+				applySort(result, rules.sortBy, state.reasons, rules.showHidden);
 			}
 			state.panel.update(buildView());
 		}
@@ -1689,20 +1726,32 @@
 			}
 		};
 
-		/** Header Hide buttons: handled here, in the capture phase, so the click never reaches Twitch's handlers. */
+		/**
+		 * Our buttons inside Twitch's content, handled here in the capture phase so the click never
+		 * reaches Twitch's handlers. Hide acts at once on this campaign; "⋯" opens the
+		 * game/publisher menu; an Open section's counter pill toggles show-hidden mode.
+		 */
 		function onContentClick(event) {
 			const target = event.target.closest && event.target.closest('[data-tres]');
 			if (!target) return;
 			event.stopPropagation();
-			const hideButton = event.target.closest('.tres-hide-btn');
-			if (!hideButton) return;
+			if (event.target.closest('button.tres-section-count')) {
+				event.preventDefault();
+				actions.setRule('showHidden', !state.data.rules.showHidden);
+				return;
+			}
+			const button = event.target.closest('.tres-hide-btn, .tres-more-btn');
+			if (!button) return;
 			event.preventDefault();
-			const campaign = findCampaign(hideButton.dataset.campaignId);
+			const campaign = findCampaign(button.dataset.campaignId);
 			if (!campaign) return;
 			const { rules } = state.data;
+			if (button.matches('.tres-hide-btn')) {
+				actions.setCampaign(campaign.id, !rules.hiddenCampaigns[campaign.id]);
+				return;
+			}
 			const toggle = (hidden, hideLabel, unhideLabel, run) => ({ label: hidden ? unhideLabel : hideLabel, run: () => run(!hidden) });
-			state.menu.open(hideButton, [
-				toggle(Boolean(rules.hiddenCampaigns[campaign.id]), 'Hide this campaign', 'Unhide this campaign', (hide) => actions.setCampaign(campaign.id, hide)),
+			state.menu.open(button, [
 				toggle(Boolean(rules.hiddenGames[campaign.gameKey]), `Hide all ${campaign.game}`, `Unhide all ${campaign.game}`, (hide) => actions.setGame(campaign.gameKey, hide)),
 				toggle(Boolean(rules.hiddenPublishers[campaign.publisherKey]), `Hide all from ${campaign.publisher}`, `Unhide all from ${campaign.publisher}`, (hide) => actions.setPublisher(campaign.publisherKey, hide))
 			]);
@@ -1772,6 +1821,7 @@
 		rewardDone,
 		hideReason,
 		sortCampaigns,
+		displayOrder,
 		campaignRootOf,
 		isOwnMutation,
 		memoryStorage,

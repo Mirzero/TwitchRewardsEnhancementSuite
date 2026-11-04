@@ -36,12 +36,56 @@ test('defaults: exactly the 18 Closed campaigns are hidden', async () => {
 	});
 });
 
-test('the Closed section gets an "18 hidden" note under its heading', async () => {
-	await withScript('page_source_default.html', ({ document }) => {
-		const notes = [...document.querySelectorAll('.tres-section-note')];
-		assert.equal(notes.length, 1);
-		assert.equal(notes[0].textContent, '18 hidden');
-		assert.equal(notes[0].previousElementSibling.textContent, 'Closed Drop Campaigns');
+const sectionCounts = (document) => [...document.querySelectorAll('.tres-section-count')]
+	.map((counter) => [counter.previousElementSibling.textContent, counter.textContent]);
+
+test('a hidden counter sits beside each section heading that has hidden campaigns', async () => {
+	await withScript('page_source_default.html', ({ window, document }) => {
+		assert.deepEqual(sectionCounts(document), [['Closed Drop Campaigns', '18 hidden']], 'nothing hidden in Open yet, so no Open counter');
+		const closedHeading = [...document.querySelectorAll('h4')].find((h) => h.textContent === 'Closed Drop Campaigns');
+		assert.ok(closedHeading.classList.contains('tres-counted'), 'the heading is made inline so the counter sits beside it');
+		click(window, headerOf(document, 'ARC Raiders').querySelector('.tres-hide-btn'));
+		assert.deepEqual(sectionCounts(document), [['Open Drop Campaigns', '1 hidden'], ['Closed Drop Campaigns', '18 hidden']]);
+		click(window, headerOf(document, 'ARC Raiders').querySelector('.tres-hide-btn'));
+		assert.deepEqual(sectionCounts(document), [['Closed Drop Campaigns', '18 hidden']], 'the counter goes when nothing in the section is hidden');
+		const openHeading = [...document.querySelectorAll('h4')].find((h) => h.textContent === 'Open Drop Campaigns');
+		assert.ok(!openHeading.classList.contains('tres-counted'));
+	});
+});
+
+test('the Open section pill toggles show-hidden mode and reads hidden or dimmed', async () => {
+	await withScript('page_source_default.html', ({ window, document, app }) => {
+		const header = headerOf(document, 'ARC Raiders');
+		click(window, header.querySelector('.tres-hide-btn'));
+		const openPill = () => document.querySelector('h4.tres-counted + button.tres-section-count');
+		assert.equal(openPill().textContent, '1 hidden');
+		assert.equal(openPill().previousElementSibling.textContent, 'Open Drop Campaigns');
+		assert.equal(openPill().getAttribute('aria-pressed'), 'false');
+		const closedPill = [...document.querySelectorAll('.tres-section-count')].find((p) => p.previousElementSibling.textContent === 'Closed Drop Campaigns');
+		assert.equal(closedPill.tagName, 'SPAN', 'the Closed counter is not a button');
+
+		click(window, openPill());
+		assert.equal(app.state.data.rules.showHidden, true);
+		assert.equal(panelInput(document, 'Show hidden').checked, true, 'the panel toggle follows');
+		assert.ok(header.parentElement.classList.contains('tres-dimmed'));
+		assert.deepEqual(sectionCounts(document), [['Open Drop Campaigns', '1 dimmed'], ['Closed Drop Campaigns', '18 dimmed']]);
+		assert.equal(openPill().getAttribute('aria-pressed'), 'true');
+		assert.equal(header.querySelector('button').getAttribute('aria-expanded'), 'false', 'nothing in Twitch toggled');
+
+		click(window, openPill());
+		assert.equal(app.state.data.rules.showHidden, false);
+		assert.ok(header.parentElement.classList.contains('tres-hidden'));
+		assert.deepEqual(sectionCounts(document), [['Open Drop Campaigns', '1 hidden'], ['Closed Drop Campaigns', '18 hidden']]);
+	});
+});
+
+test('the counter never changes the heading text the script reads', async () => {
+	await withScript('page_source_default.html', ({ document, app }) => {
+		app.state.dirty = new Set(roots(document));
+		const result = app.scanNow();
+		assert.equal(result.recognized, true);
+		assert.deepEqual(result.diagnostics.unknownHeadings, []);
+		assert.equal(result.campaigns.filter((c) => c.type === 'Closed Drop Campaign').length, 18);
 	});
 });
 
@@ -58,16 +102,19 @@ test('one Hide button per header, and rescanning never duplicates them', async (
 	});
 });
 
-test('clicking Hide opens the menu without toggling the campaign', async () => {
+test('each header has a Hide button and a ⋯ button, neither of which toggles the campaign', async () => {
 	await withScript('page_source_default.html', ({ window, document }) => {
 		const header = headerOf(document, 'ARC Raiders');
+		assert.equal(header.querySelectorAll('.tres-more-btn').length, 1);
+		assert.equal(header.querySelector('.tres-hide-btn').textContent, 'Hide');
 		let twitchSawClick = false;
 		header.querySelector('button').addEventListener('click', () => { twitchSawClick = true; });
 		document.body.addEventListener('click', () => { twitchSawClick = true; });
+		click(window, header.querySelector('.tres-more-btn'));
+		assert.deepEqual(menuItems(document).map((b) => b.textContent), ['Hide all ARC Raiders', 'Hide all from Embark Studios'], '⋯ offers only game and publisher');
 		click(window, header.querySelector('.tres-hide-btn'));
 		assert.equal(header.querySelector('button').getAttribute('aria-expanded'), 'false');
-		assert.equal(twitchSawClick, false, 'the click never reaches the page');
-		assert.deepEqual(menuItems(document).map((b) => b.textContent), ['Hide this campaign', 'Hide all ARC Raiders', 'Hide all from Embark Studios']);
+		assert.equal(twitchSawClick, false, 'neither click reaches the page');
 	});
 });
 
@@ -75,7 +122,7 @@ test('Hide all {Game} hides that game in every section, and survives a restart',
 	const storage = tres.memoryStorage();
 	await withScript('page_source_default.html', async ({ window, document, app }) => {
 		panelInput(document, 'Hide closed').click();
-		click(window, headerOf(document, 'Overwatch', /Oct 30/).querySelector('.tres-hide-btn'));
+		click(window, headerOf(document, 'Overwatch', /Oct 30/).querySelector('.tres-more-btn'));
 		menuItems(document).find((b) => b.textContent === 'Hide all Overwatch').click();
 		assert.deepEqual(hiddenGames(document), ['Overwatch', 'Overwatch']);
 		app.flushWrite();
@@ -83,15 +130,15 @@ test('Hide all {Game} hides that game in every section, and survives a restart',
 	assert.ok(storage.read().rules.hiddenGames['overwatch|blizzard']);
 	await withScript('page_source_default.html', ({ document }) => {
 		assert.deepEqual(hiddenGames(document), ['Overwatch', 'Overwatch'], 'still hidden after reload');
-		click(document.defaultView, headerOf(document, 'Overwatch', /Oct 30/).querySelector('.tres-hide-btn'));
+		click(document.defaultView, headerOf(document, 'Overwatch', /Oct 30/).querySelector('.tres-more-btn'));
 		assert.ok(menuItems(document).some((b) => b.textContent === 'Unhide all Overwatch'));
 	}, { storage });
 });
 
-test('Hide this campaign hides exactly one, and the Hidden list can unhide it', async () => {
+test('the Hide button hides exactly that campaign at once, and the Hidden list can unhide it', async () => {
 	await withScript('page_source_default.html', ({ window, document }) => {
 		click(window, headerOf(document, 'ARC Raiders').querySelector('.tres-hide-btn'));
-		menuItems(document)[0].click();
+		assert.ok(document.querySelector('#tres-menu').hidden, 'no menu: it acts immediately');
 		assert.ok(headerOf(document, 'ARC Raiders').parentElement.classList.contains('tres-hidden'));
 		assert.equal(roots(document).filter((r) => r.classList.contains('tres-hidden')).length, 19);
 		const unhide = document.querySelector('#tres-panel .tres-hidden-list button');
@@ -112,7 +159,7 @@ test('panel toggles: Hide closed off shows them; Show hidden dims instead of hid
 		const reasons = [...document.querySelectorAll('.tres-reason')].filter((r) => !r.hidden).map((r) => r.textContent);
 		assert.equal(reasons.length, 18);
 		assert.ok(reasons.every((text) => text === 'hidden: closed'));
-		assert.equal(document.querySelectorAll('.tres-section-note').length, 0, 'no "all hidden" note while showing hidden');
+		assert.deepEqual(sectionCounts(document), [['Closed Drop Campaigns', '18 dimmed']], 'the counter stays, reading "dimmed", while showing hidden');
 	});
 });
 
@@ -171,7 +218,6 @@ test('no loop: applying rules and injecting controls never triggers another scan
 		await wait(window, 250);
 		const scans = app.state.scanCount;
 		click(window, headerOf(document, 'ARC Raiders').querySelector('.tres-hide-btn'));
-		menuItems(document)[0].click();
 		panelInput(document, 'Show hidden').click();
 		await wait(window, 250);
 		assert.equal(app.state.scanCount, scans);
@@ -193,30 +239,24 @@ test('mutations: opening a campaign re-parses only that campaign', async () => {
 	});
 });
 
-test('panel: starts collapsed, pill expands, outside click and Esc collapse', async () => {
+test('panel: starts collapsed; the pill expands it; clicks outside never collapse it; "–" and Esc do', async () => {
 	await withScript('page_source_default.html', ({ window, document }) => {
 		const panel = document.querySelector('#tres-panel');
 		assert.equal(panel.dataset.expanded, 'false');
 		click(window, panel.querySelector('.tres-pill'));
 		assert.equal(panel.dataset.expanded, 'true');
-		click(window, panel.querySelector('.tres-summary'), 'mousedown');
-		assert.equal(panel.dataset.expanded, 'true', 'a click inside keeps it open');
-		click(window, document.querySelector('.drops-root__content'), 'mousedown');
-		assert.equal(panel.dataset.expanded, 'false');
+		for (const outside of [document.querySelector('.drops-root__content'), document.body, headerOf(document, 'ARC Raiders')]) {
+			click(window, outside, 'mousedown');
+			click(window, outside);
+			assert.equal(panel.dataset.expanded, 'true', 'a click outside keeps it open');
+		}
+		click(window, headerOf(document, 'ARC Raiders').querySelector('.tres-hide-btn'));
+		assert.equal(panel.dataset.expanded, 'true', 'using the page controls keeps it open');
+		[...panel.querySelectorAll('.tres-head button')].find((b) => b.textContent === '–').click();
+		assert.equal(panel.dataset.expanded, 'false', 'the collapse button closes it');
 		click(window, panel.querySelector('.tres-pill'));
 		document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-		assert.equal(panel.dataset.expanded, 'false');
-	});
-});
-
-test('panel: does not collapse while typing in a search box', async () => {
-	await withScript('page_source_default.html', ({ window, document }) => {
-		const panel = document.querySelector('#tres-panel');
-		click(window, panel.querySelector('.tres-pill'));
-		const search = panel.querySelector('input[type="search"]');
-		search.focus();
-		click(window, document.querySelector('.drops-root__content'), 'mousedown');
-		assert.equal(panel.dataset.expanded, 'true');
+		assert.equal(panel.dataset.expanded, 'false', 'Esc closes it');
 	});
 });
 
@@ -386,7 +426,7 @@ test('the panel stays open while the loader runs', async () => {
 		assert.equal(panel.dataset.expanded, 'true');
 		await running;
 		click(window, document.querySelector('.drops-root__content'), 'mousedown');
-		assert.equal(panel.dataset.expanded, 'false');
+		assert.equal(panel.dataset.expanded, 'true', 'and after it, since outside clicks never collapse it');
 	}, { storage: storageKnowingAllBut(['Enshrouded']), prepare: (document) => stubTwitchAccordion(document, clicks), loaderPollMs: 5 });
 });
 
@@ -443,11 +483,94 @@ test('switching to Twitch order removes all sorting; the choice survives a resta
 	}, { storage });
 });
 
-test('leaving the page removes the sorting', async () => {
+test('leaving the page removes the sorting and the section counters', async () => {
 	await withScript('page_source_default.html', ({ window, document }) => {
 		assert.equal(document.querySelectorAll('.tres-sorted').length, 2);
 		window.history.pushState({}, '', '/directory');
 		assert.equal(document.querySelectorAll('.tres-sorted').length, 0);
 		assert.ok(roots(document).every((root) => !root.style.order));
+		assert.equal(document.querySelectorAll('.tres-section-count, h4.tres-counted').length, 0, 'and the section counters');
+	});
+});
+
+test('in show-hidden mode the Hide button of a hidden campaign reads Unhide and unhides it', async () => {
+	await withScript('page_source_default.html', ({ window, document }) => {
+		panelInput(document, 'Show hidden').click();
+		const header = headerOf(document, 'ARC Raiders');
+		click(window, header.querySelector('.tres-hide-btn'));
+		assert.ok(header.parentElement.classList.contains('tres-dimmed'));
+		assert.equal(header.querySelector('.tres-hide-btn').textContent, 'Unhide');
+		click(window, header.querySelector('.tres-hide-btn'));
+		assert.ok(!header.parentElement.classList.contains('tres-dimmed'));
+		assert.equal(header.querySelector('.tres-hide-btn').textContent, 'Hide');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Branding (spec §4.7)
+// ---------------------------------------------------------------------------
+
+test('every element TRES injects has the #99FF33 brand border, and the small ones are pills', async () => {
+	await withScript('page_source_opencampaigns.html', ({ document }) => {
+		const css = document.querySelector('#tres-style').textContent;
+		const ruleFor = (selector) => {
+			const rule = css.split('\n').find((line) => line.startsWith(`${selector}{`) || line.startsWith(`${selector},`));
+			assert.ok(rule, `a CSS rule for ${selector}`);
+			return rule;
+		};
+		const pills = ['#tres-panel .tres-pill', '.drops-root__content .tres-hide-btn', '.drops-root__content .tres-reason',
+			'.drops-root__content .tres-claim', '.drops-root__content .tres-done-reason', '.drops-root__content .tres-section-count'];
+		for (const selector of pills) {
+			const rule = ruleFor(selector);
+			assert.match(rule, /border:1px solid #99ff33/, selector);
+			assert.match(rule, /border-radius:999px/, `${selector} is a pill`);
+		}
+		for (const selector of ['#tres-panel .tres-body', '#tres-menu']) assert.match(ruleFor(selector), /border:1px solid #99ff33/, selector);
+		// The ⋯ button shares the Hide button's rule.
+		assert.match(ruleFor('.drops-root__content .tres-hide-btn'), /^\.drops-root__content \.tres-hide-btn,\.drops-root__content \.tres-more-btn\{/);
+		// Every injected element on the page is covered by one of those rules.
+		const injectedClasses = new Set([...document.querySelectorAll('.drops-root__content [data-tres], #tres-panel .tres-pill')]
+			.flatMap((node) => [...node.classList]).filter((name) => name.startsWith('tres-')));
+		for (const name of injectedClasses) {
+			if (name === 'tres-controls') continue; // an invisible wrapper around the header buttons
+			assert.ok(css.includes(`.${name}{`) || css.includes(`.${name},`), `.${name} is styled`);
+			assert.ok(pills.some((selector) => selector.endsWith(`.${name}`)) || name === 'tres-more-btn', `.${name} is branded`);
+		}
+	});
+});
+
+test('dimmed campaigns sort to the bottom of their section, then by the chosen order', async () => {
+	await withScript('page_source_default.html', ({ window, document, app }) => {
+		for (const game of ['Rise Online', 'ARC Raiders']) click(window, headerOf(document, game).querySelector('.tres-hide-btn'));
+		const openContainer = headerOf(document, 'ARC Raiders').parentElement.parentElement;
+		const open = () => app.state.result.campaigns.filter((c) => c.type === 'Open Drop Campaign');
+
+		// Hidden (not dimmed): order is the plain sort, and Rise Online is still first by newest.
+		assert.equal(visualOrder(openContainer)[0], 'Rise Online');
+
+		panelInput(document, 'Show hidden').click();
+		const order = visualOrder(openContainer);
+		assert.deepEqual(order.slice(-2), ['Rise Online', 'ARC Raiders'], 'the two dimmed campaigns, newest first, at the bottom');
+		const visibleExpected = tres.sortCampaigns(open().filter((c) => !['Rise Online', 'ARC Raiders'].includes(c.game)), 'newest').map((c) => c.game);
+		assert.deepEqual(order.slice(0, -2), visibleExpected, 'visible ones keep the newest-first order');
+	});
+});
+
+test('Twitch order still moves dimmed campaigns to the bottom, and clears when nothing is dimmed', async () => {
+	await withScript('page_source_default.html', ({ window, document }) => {
+		sortRadio(document, 'twitch').click();
+		const openContainer = headerOf(document, 'ARC Raiders').parentElement.parentElement;
+		click(window, headerOf(document, 'ARC Raiders').querySelector('.tres-hide-btn'));
+		assert.ok(!openContainer.classList.contains('tres-sorted'), 'hidden, not dimmed: Twitch order untouched');
+
+		panelInput(document, 'Show hidden').click();
+		assert.ok(openContainer.classList.contains('tres-sorted'));
+		const order = visualOrder(openContainer);
+		assert.equal(order.at(-1), 'ARC Raiders', 'the dimmed campaign moves to the bottom');
+		const twitchOrder = [...openContainer.children].map((child) => child.querySelector('p').textContent).filter((game) => game !== 'ARC Raiders');
+		assert.deepEqual(order.slice(0, -1), twitchOrder, 'the rest keep Twitch order');
+
+		panelInput(document, 'Show hidden').click();
+		assert.ok(!openContainer.classList.contains('tres-sorted'), 'nothing dimmed any more: back to Twitch order');
 	});
 });
