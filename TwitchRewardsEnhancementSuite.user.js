@@ -1,16 +1,18 @@
 // ==UserScript==
-// @name         Twitch Drops Campaign Filters
+// @name         Twitch Rewards Enhancement Suite
 // @namespace    https://github.com/Mirzero/TwitchRewardsEnhancementSuite
-// @version      0.8.0
-// @description  Hide Twitch Drops campaigns you don't care about or have already finished.
+// @version      0.9.0
+// @description  Twitch Drops and rewards tools: hide, sort and track campaigns you don't care about or have already finished.
 // @author       Mirzero
 // @homepageURL  https://github.com/Mirzero/TwitchRewardsEnhancementSuite
 // @supportURL   https://github.com/Mirzero/TwitchRewardsEnhancementSuite/issues
-// @updateURL    https://raw.githubusercontent.com/Mirzero/TwitchRewardsEnhancementSuite/main/TRES-DropCampaigns.user.js
-// @downloadURL  https://raw.githubusercontent.com/Mirzero/TwitchRewardsEnhancementSuite/main/TRES-DropCampaigns.user.js
+// @updateURL    https://raw.githubusercontent.com/Mirzero/TwitchRewardsEnhancementSuite/main/TwitchRewardsEnhancementSuite.user.js
+// @downloadURL  https://raw.githubusercontent.com/Mirzero/TwitchRewardsEnhancementSuite/main/TwitchRewardsEnhancementSuite.user.js
 // @match        https://www.twitch.tv/*
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_addValueChangeListener
+// @grant        GM_removeValueChangeListener
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -26,7 +28,11 @@
 	const BRAND_COLOR = '#99ff33';
 	const STORAGE_KEY = 'tresDropCampaigns.v2';
 	const SCHEMA = 2;
+	// The Inventory snapshot has its own key, written only by the Inventory tab (spec §11.6).
+	const INVENTORY_KEY = 'tresInventory.v1';
+	const INVENTORY_SCHEMA = 1;
 	const CAMPAIGNS_PATH = '/drops/campaigns';
+	const INVENTORY_PATH = '/drops/inventory';
 	const CONTENT_SELECTOR = '.drops-root__content';
 	const HEADER_SELECTOR = '.accordion-header[role="heading"][aria-level="3"]';
 	const CLOSED_TYPE = 'Closed Drop Campaign';
@@ -52,7 +58,19 @@
 	const LOADER_POLL_MS = 200;
 	const LOADER_STABLE_POLLS = 3;
 	const LOADER_MAX_WAIT_MS = 8000;
-	const DAY_MS = 24 * 60 * 60 * 1000;
+	const MINUTE_MS = 60 * 1000;
+	const HOUR_MS = 60 * MINUTE_MS;
+	const DAY_MS = 24 * HOUR_MS;
+	// Inventory page text (spec §11.1). English only, like the section headings.
+	const CLAIM_ALT_PREFIX = 'Drop image for ';
+	const LOAD_MORE_TEXT = 'Load More';
+	const CLAIM_NOW_TEXT = 'Claim Now';
+	const CONNECT_TEXT = 'Connect';
+	const CAPTION_RE = /^(\d+)% of (.+)$/;
+	const REWARD_IMAGE_SELECTOR = 'img.inventory-drop-image:not([alt^="Drop image for"])';
+	const CLAIM_IMAGE_SELECTOR = 'img.inventory-drop-image[alt^="Drop image for"]';
+	// Write the snapshot again after this long even if nothing changed, so "last read" stays honest.
+	const INVENTORY_REFRESH_MS = 60 * 1000;
 	const PRUNE_AFTER_MS = 60 * DAY_MS;
 	// lastSeen only needs coarse precision; this keeps scans from causing storage writes.
 	const LAST_SEEN_RESOLUTION_MS = 6 * 60 * 60 * 1000;
@@ -88,6 +106,14 @@
 
 	function isCampaignsPath(pathname) {
 		return String(pathname || '').startsWith(CAMPAIGNS_PATH);
+	}
+
+	function isInventoryPath(pathname) {
+		return String(pathname || '').startsWith(INVENTORY_PATH);
+	}
+
+	function imageUuidOf(src) {
+		return (String(src || '').match(REWARD_UUID_RE)?.[1] || '').toLowerCase() || null;
 	}
 
 	function clone(value) {
@@ -147,6 +173,25 @@
 		} catch (error) {
 			return null;
 		}
+	}
+
+	/**
+	 * The absolute window [earliest, latest] (epoch ms) in which a claim with Twitch's relative
+	 * time text happened, measured from `readAt` (spec §11.2). Twitch rounds down, so "N hours
+	 * ago" means N to N+1 hours. Returns null for text it doesn't recognise.
+	 */
+	function relativeWindow(text, readAt) {
+		const value = normalize(text);
+		if (/^(just now|now|\d+ seconds? ago)$/.test(value)) return { earliest: readAt - MINUTE_MS, latest: readAt };
+		if (value === 'yesterday') return { earliest: readAt - 2 * DAY_MS, latest: readAt - DAY_MS };
+		if (value === 'last month') return { earliest: readAt - 61 * DAY_MS, latest: readAt - 28 * DAY_MS };
+		const match = value.match(/^(\d+|an?) (minute|hour|day|month)s? ago$/);
+		if (!match) return null;
+		const count = /^an?$/.test(match[1]) ? 1 : Number(match[1]);
+		// Month rounding is unconfirmed, so month windows stay wide.
+		if (match[2] === 'month') return { earliest: readAt - (count + 1) * 31 * DAY_MS, latest: readAt - Math.max(0, count - 1) * 28 * DAY_MS };
+		const unit = { minute: MINUTE_MS, hour: HOUR_MS, day: DAY_MS }[match[2]];
+		return { earliest: readAt - (count + 1) * unit, latest: readAt - count * unit };
 	}
 
 	function localDateStamp(time) {
@@ -354,7 +399,7 @@
 			const closedMark = [...tile.querySelectorAll('div')].some((div) => !div.children.length && textOf(div) === CLOSED_WATERMARK);
 			if (closedMark) closedWatermarks += 1;
 			if (!name || !type) readable = false;
-			return { name, type, imageUuid: (src.match(REWARD_UUID_RE)?.[1] || '').toLowerCase() || null, closedMark, tileEl: tile };
+			return { name, type, imageUuid: imageUuidOf(src), closedMark, tileEl: tile };
 		});
 
 		return {
@@ -376,6 +421,87 @@
 			occurrences.set(base, occurrence + 1);
 			return { key: rewardKeyOf(campaignId, reward.imageUuid, reward.name, occurrence), ...reward };
 		});
+	}
+
+	/**
+	 * Reads the Inventory page (spec §11.1–11.2). Returns { found, ready, snapshot, loadMore, diagnostics }.
+	 * `ready` is false until the Claimed list has rendered, so a half-loaded page is never saved.
+	 * `windowOf(img, timeText)` may supply a claim's time window; by default it is measured from `now`.
+	 */
+	function extractInventory(root, now, windowOf) {
+		const content = findContent(root);
+		const page = content && content.querySelector('.inventory-page');
+		const diagnostics = { groups: 0, rewards: 0, claims: 0, unknownTimes: [] };
+		const result = { found: Boolean(page), ready: false, snapshot: null, loadMore: null, diagnostics };
+		if (!page) return result;
+		result.ready = [...page.querySelectorAll('h5')].some((heading) => textOf(heading) === 'Claimed');
+		const inProgress = [...page.querySelectorAll('.inventory-campaign-info')].map((info) => readGroup(info, page));
+		const claims = [];
+		for (const img of page.querySelectorAll(CLAIM_IMAGE_SELECTOR)) {
+			const claim = readClaim(img, page);
+			const span = claim.timeText === null ? null : windowOf ? windowOf(img, claim.timeText) : relativeWindow(claim.timeText, now);
+			if (!span) diagnostics.unknownTimes.push(claim.timeText);
+			claims.push({ ...claim, earliest: span ? span.earliest : null, latest: span ? span.latest : null });
+		}
+		result.loadMore = findLoadMore(page);
+		diagnostics.groups = inProgress.length;
+		diagnostics.rewards = inProgress.reduce((sum, group) => sum + group.rewards.length, 0);
+		diagnostics.claims = claims.length;
+		result.snapshot = { schema: INVENTORY_SCHEMA, readAt: now, complete: !result.loadMore, inProgress, claims };
+		return result;
+	}
+
+	/** One In Progress drop group: its title, drop id, end date and rewards. */
+	function readGroup(info, page) {
+		const link = info.querySelector('a[href*="dropID="]');
+		const endLine = [...info.querySelectorAll('p')].map(textOf).find((text) => text.startsWith('End Date:'));
+		// The group's container is the nearest ancestor that also holds reward images.
+		let group = info.parentElement;
+		while (group && group !== page && !group.querySelector(REWARD_IMAGE_SELECTOR)) group = group.parentElement;
+		const isOwn = group && group !== page && group.querySelectorAll('.inventory-campaign-info').length === 1;
+		return {
+			dropId: (link?.getAttribute('href').match(/dropID=([0-9a-f-]+)/i)?.[1] || '').toLowerCase() || null,
+			title: textOf(link),
+			endText: endLine ? clean(endLine.slice('End Date:'.length)) : null,
+			rewards: isOwn ? [...group.querySelectorAll(REWARD_IMAGE_SELECTOR)].map((img) => readProgress(img, group)) : []
+		};
+	}
+
+	/** One In Progress reward. Its container is the nearest ancestor of the image that holds a progress bar. */
+	function readProgress(img, group) {
+		let container = img.parentElement;
+		while (container !== group && !container.querySelector('[role="progressbar"]')) container = container.parentElement;
+		const texts = [...container.querySelectorAll('p')].map(textOf).filter(Boolean);
+		const caption = texts.find((text) => CAPTION_RE.test(text));
+		const bar = container.querySelector('[role="progressbar"]');
+		const percent = Number(bar ? bar.getAttribute('aria-valuenow') : caption ? caption.match(CAPTION_RE)[1] : 0) || 0;
+		const labels = [...container.querySelectorAll('button, a')].map(textOf);
+		let state = 'progress';
+		if (labels.includes(CLAIM_NOW_TEXT)) state = 'claimable';
+		else if (percent >= 100) state = labels.includes(CONNECT_TEXT) ? 'connect' : 'complete';
+		return {
+			name: texts.find((text) => !CAPTION_RE.test(text)) || '',
+			imageUuid: imageUuidOf(img.getAttribute('src')),
+			percent,
+			requiredText: caption ? caption.match(CAPTION_RE)[2] : null,
+			state
+		};
+	}
+
+	/** One Claimed entry: the name from the image's alt text, and the relative time beside it. */
+	function readClaim(img, page) {
+		const name = clean(img.getAttribute('alt').slice(CLAIM_ALT_PREFIX.length));
+		let timeText = null;
+		for (let node = img.parentElement; node && node !== page && timeText === null; node = node.parentElement) {
+			// Stop before climbing into a container that holds other entries.
+			if (node.querySelectorAll(CLAIM_IMAGE_SELECTOR).length > 1) break;
+			timeText = [...node.querySelectorAll('p')].map(textOf).find((text) => text && text !== name) ?? null;
+		}
+		return { name, imageUuid: imageUuidOf(img.getAttribute('src')), timeText };
+	}
+
+	function findLoadMore(page) {
+		return [...page.querySelectorAll('button')].find((node) => textOf(node) === LOAD_MORE_TEXT) || null;
 	}
 
 	/** Aggregate counts for the diagnostics subpanel (spec §7). */
@@ -435,6 +561,8 @@
 				hiddenPublishers: {}
 			},
 			claimed: {},
+			// { rewardKey: { at, campaignId } }: "not claimed, whatever the Inventory says" (spec §11.4).
+			inventoryOverrides: {},
 			campaigns: {}
 		};
 	}
@@ -470,7 +598,48 @@
 				hiddenPublishers: map(rules.hiddenPublishers)
 			},
 			claimed: map(value.claimed),
+			inventoryOverrides: map(value.inventoryOverrides),
 			campaigns: map(value.campaigns)
+		};
+	}
+
+	/** Coerces a stored Inventory snapshot (spec §11.2) into a valid one, or null. Never throws. */
+	function sanitizeInventory(raw) {
+		let value = raw;
+		if (typeof value === 'string') {
+			try {
+				value = JSON.parse(value);
+			} catch (error) {
+				return null;
+			}
+		}
+		if (!isPlainObject(value) || value.schema !== INVENTORY_SCHEMA || typeof value.readAt !== 'number') return null;
+		if (!Array.isArray(value.inProgress) || !Array.isArray(value.claims)) return null;
+		const text = (input) => (typeof input === 'string' ? input : null);
+		const time = (input) => (typeof input === 'number' ? input : null);
+		return {
+			schema: INVENTORY_SCHEMA,
+			readAt: value.readAt,
+			complete: value.complete === true,
+			inProgress: value.inProgress.filter(isPlainObject).map((group) => ({
+				dropId: text(group.dropId),
+				title: text(group.title) || '',
+				endText: text(group.endText),
+				rewards: (Array.isArray(group.rewards) ? group.rewards : []).filter(isPlainObject).map((reward) => ({
+					name: text(reward.name) || '',
+					imageUuid: text(reward.imageUuid),
+					percent: typeof reward.percent === 'number' ? reward.percent : 0,
+					requiredText: text(reward.requiredText),
+					state: ['progress', 'connect', 'claimable', 'complete'].includes(reward.state) ? reward.state : 'progress'
+				}))
+			})),
+			claims: value.claims.filter(isPlainObject).map((claim) => ({
+				name: text(claim.name) || '',
+				imageUuid: text(claim.imageUuid),
+				timeText: text(claim.timeText),
+				earliest: time(claim.earliest),
+				latest: time(claim.latest)
+			}))
 		};
 	}
 
@@ -499,6 +668,7 @@
 			merged.rules[name] = { ...a.rules[name], ...b.rules[name] };
 		}
 		merged.claimed = { ...a.claimed, ...b.claimed };
+		merged.inventoryOverrides = { ...a.inventoryOverrides, ...b.inventoryOverrides };
 		for (const [id, incoming] of Object.entries(b.campaigns)) {
 			const existing = a.campaigns[id];
 			if (!existing) {
@@ -525,8 +695,8 @@
 				removed.add(id);
 			}
 		}
-		for (const [key, claim] of Object.entries(data.claimed)) {
-			if (removed.has(claim.campaignId)) delete data.claimed[key];
+		for (const map of [data.claimed, data.inventoryOverrides]) {
+			for (const [key, entry] of Object.entries(map)) if (removed.has(entry.campaignId)) delete map[key];
 		}
 		return removed.size;
 	}
@@ -575,6 +745,76 @@
 		return changed;
 	}
 
+	/**
+	 * Matches an Inventory snapshot to the campaigns (spec §11.3). Pure. Returns
+	 * { claimedKeys: Set, progressByKey: Map, matched, unmatched }. Conservative: a claim counts
+	 * only when exactly one campaign reward has its image and a [start, end] containing its window.
+	 */
+	function matchInventory(campaigns, inventory) {
+		const result = {
+			claimedKeys: new Set(),
+			progressByKey: new Map(),
+			matched: { claims: 0, groups: 0, progress: 0 },
+			unmatched: { claims: 0, ambiguous: 0, noTime: 0, groups: 0 }
+		};
+		if (!inventory) return result;
+		const known = campaigns.filter((campaign) => campaign.rewards && campaign.rewards.length);
+		const hasImage = (campaign, uuid) => campaign.rewards.some((reward) => reward.imageUuid === uuid);
+
+		for (const group of inventory.inProgress) {
+			const uuids = [...new Set(group.rewards.map((reward) => reward.imageUuid).filter(Boolean))];
+			let candidates = uuids.length
+				? known.filter((campaign) => campaign.title && normalize(campaign.title) === normalize(group.title) && uuids.some((uuid) => hasImage(campaign, uuid)))
+				: [];
+			if (uuids.length && candidates.length !== 1) candidates = known.filter((campaign) => uuids.every((uuid) => hasImage(campaign, uuid)));
+			if (candidates.length !== 1) {
+				result.unmatched.groups += 1;
+				continue;
+			}
+			result.matched.groups += 1;
+			for (const progress of group.rewards) {
+				if (!progress.imageUuid) continue;
+				let targets = candidates[0].rewards.filter((reward) => reward.imageUuid === progress.imageUuid);
+				// The same image twice in one campaign: tell them apart by name, or not at all.
+				if (targets.length > 1) targets = targets.filter((reward) => normalize(reward.name) === normalize(progress.name));
+				if (targets.length !== 1) continue;
+				result.progressByKey.set(targets[0].key, { percent: progress.percent, requiredText: progress.requiredText, state: progress.state });
+				result.matched.progress += 1;
+			}
+		}
+
+		for (const claim of inventory.claims) {
+			if (!claim.imageUuid || claim.earliest === null || claim.latest === null) {
+				result.unmatched.noTime += 1;
+				continue;
+			}
+			const hits = [];
+			for (const campaign of known) {
+				if (campaign.start === null || campaign.end === null || claim.earliest < campaign.start || claim.latest > campaign.end) continue;
+				for (const reward of campaign.rewards) if (reward.imageUuid === claim.imageUuid) hits.push(reward.key);
+			}
+			if (hits.length === 1) {
+				result.claimedKeys.add(hits[0]);
+				result.matched.claims += 1;
+			} else {
+				result.unmatched[hits.length ? 'ambiguous' : 'claims'] += 1;
+			}
+		}
+		return result;
+	}
+
+	/**
+	 * The claimed marks the rules use (spec §11.4): manual ticks, plus Inventory claims the user
+	 * hasn't overridden. Inventory entries carry `source: 'inventory'`.
+	 */
+	function effectiveClaims(data, match) {
+		const claimed = { ...data.claimed };
+		for (const key of match.claimedKeys) {
+			if (!claimed[key] && !data.inventoryOverrides[key]) claimed[key] = { source: 'inventory' };
+		}
+		return claimed;
+	}
+
 	function rewardDone(reward, rules, claimed) {
 		return Boolean(claimed[reward.key]) || rules.hiddenRewardTypes.includes(normalize(reward.type));
 	}
@@ -621,18 +861,42 @@
 		return [...sortCampaigns(visible, sortBy), ...sortCampaigns(dimmed, sortBy)];
 	}
 
+	/**
+	 * Settings live under STORAGE_KEY; the Inventory snapshot under INVENTORY_KEY, so the
+	 * Inventory and Campaigns tabs never overwrite each other's data (spec §11.6).
+	 * `watchInventory(callback)` reports snapshot changes from any tab and returns an unsubscribe.
+	 */
 	function gmStorage() {
 		return {
 			read: () => GM_getValue(STORAGE_KEY, null),
-			write: (value) => GM_setValue(STORAGE_KEY, value)
+			write: (value) => GM_setValue(STORAGE_KEY, value),
+			readInventory: () => GM_getValue(INVENTORY_KEY, null),
+			writeInventory: (value) => GM_setValue(INVENTORY_KEY, value),
+			watchInventory(callback) {
+				if (typeof GM_addValueChangeListener !== 'function') return () => {};
+				const id = GM_addValueChangeListener(INVENTORY_KEY, () => callback());
+				return () => { if (typeof GM_removeValueChangeListener === 'function') GM_removeValueChangeListener(id); };
+			}
 		};
 	}
 
-	function memoryStorage(initial = null) {
+	/** In-memory storage for tests. Two windows sharing one behave like two tabs. */
+	function memoryStorage(initial = null, initialInventory = null) {
 		let value = initial === null ? null : clone(initial);
+		let inventory = initialInventory === null ? null : clone(initialInventory);
+		const watchers = new Set();
 		return {
 			read: () => (value === null ? null : clone(value)),
-			write: (next) => { value = clone(next); }
+			write: (next) => { value = clone(next); },
+			readInventory: () => (inventory === null ? null : clone(inventory)),
+			writeInventory(next) {
+				inventory = next === null ? null : clone(next);
+				for (const callback of [...watchers]) callback();
+			},
+			watchInventory(callback) {
+				watchers.add(callback);
+				return () => watchers.delete(callback);
+			}
 		};
 	}
 
@@ -686,6 +950,11 @@
 .drops-root__content .tres-claim input{margin:0}
 .drops-root__content [data-tres-done]{opacity:.45}
 .drops-root__content .tres-done-reason{position:absolute;bottom:2px;left:2px;padding:0 6px;border:1px solid ${BRAND_COLOR};border-radius:999px;background:rgba(14,14,16,.85);color:#adadb8;font-size:11px}
+.drops-root__content .tres-progress{position:absolute;left:0;right:0;bottom:0;height:4px;background:rgba(14,14,16,.7);z-index:1}
+.drops-root__content .tres-progress>div{height:100%;background:#9147ff}
+.drops-root__content .tres-progress-pill{position:absolute;bottom:6px;left:2px;max-width:calc(100% - 4px);padding:0 6px;border:1px solid ${BRAND_COLOR};border-radius:999px;background:rgba(14,14,16,.85);color:#efeff1;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;z-index:1}
+.drops-root__content [data-tres-in-progress] img{opacity:.6}
+.drops-root__content .tres-header-progress{padding:0 6px;border:1px solid ${BRAND_COLOR};border-radius:999px;background:#18181b;color:#efeff1;font-size:11px;white-space:nowrap}
 .drops-root__content h4.tres-counted{display:inline-block}
 .drops-root__content .tres-section-count{display:inline-block;margin-left:8px;padding:0 8px;border:1px solid ${BRAND_COLOR};border-radius:999px;background:transparent;color:#adadb8;font-family:inherit;font-size:12px;line-height:18px;vertical-align:middle}
 .drops-root__content button.tres-section-count{cursor:pointer}
@@ -769,7 +1038,11 @@
 		};
 	}
 
-	function createPanel(doc, win, actions) {
+	/**
+	 * The floating panel's frame, shared by the Campaigns and Inventory pages (spec §4.3, §11.5):
+	 * the style sheet, a collapsed pill, and a body that only "–" or Esc collapses.
+	 */
+	function createShell(doc, win, title, page) {
 		const style = element(doc, 'style');
 		style.id = 'tres-style';
 		style.setAttribute('data-tres', 'style');
@@ -780,16 +1053,46 @@
 		panel.id = 'tres-panel';
 		panel.setAttribute('data-tres', 'panel');
 		panel.dataset.expanded = 'false';
+		panel.dataset.page = page;
 
 		const pill = element(doc, 'button', 'tres-pill', 'TRES');
 		pill.type = 'button';
-		pill.title = 'Drop campaign filters';
+		pill.title = title;
 
 		const body = element(doc, 'div', 'tres-body');
 		const head = element(doc, 'div', 'tres-head');
 		const collapse = button(doc, '–', () => setExpanded(false));
 		collapse.title = 'Collapse';
-		head.append(element(doc, 'strong', '', 'Drop campaign filters'), collapse);
+		head.append(element(doc, 'strong', '', title), collapse);
+		body.append(head);
+		panel.append(pill, body);
+		doc.body.appendChild(panel);
+
+		function setExpanded(expanded) {
+			panel.dataset.expanded = String(expanded);
+		}
+		pill.addEventListener('click', () => setExpanded(true));
+		// Clicks outside the panel never collapse it (spec §4.3); only "–" or Esc does.
+		const onKeyDown = (event) => {
+			if (event.key === 'Escape' && panel.dataset.expanded === 'true') setExpanded(false);
+		};
+		doc.addEventListener('keydown', onKeyDown, true);
+
+		return {
+			panel,
+			pill,
+			body,
+			setExpanded,
+			destroy() {
+				doc.removeEventListener('keydown', onKeyDown, true);
+				panel.remove();
+				style.remove();
+			}
+		};
+	}
+
+	function createPanel(doc, win, actions) {
+		const { panel, pill, body, setExpanded, destroy } = createShell(doc, win, 'Drop campaign filters', 'campaigns');
 
 		const warning = element(doc, 'p', 'tres-warning', 'Unrecognised page. Is Twitch set to English?');
 		warning.hidden = true;
@@ -854,6 +1157,18 @@
 		const clearClaims = button(doc, 'Clear marks for campaigns no longer listed', () => actions.clearOrphanClaims());
 		const claimedSection = section(doc, 'Claimed rewards', false, claimedLine, clearClaims);
 
+		// Inventory (spec §11.5)
+		const inventoryLine = element(doc, 'p', 'tres-note');
+		const inventoryCounts = element(doc, 'p', 'tres-note');
+		const inventoryStatus = element(doc, 'p', 'tres-status');
+		const rescanButton = button(doc, 'Rescan on Inventory tab', () => actions.openInventory());
+		rescanButton.title = 'Open the Inventory tab; TRES reads it on arrival';
+		const clearInventoryButton = button(doc, 'Clear Inventory claims', () => setStatus(inventoryStatus, actions.clearInventory()));
+		clearInventoryButton.title = 'Forget what was read from the Inventory. Manual ticks are kept.';
+		const inventoryRow = element(doc, 'div', 'tres-row');
+		inventoryRow.append(rescanButton, clearInventoryButton);
+		const inventorySection = section(doc, 'Inventory', false, inventoryLine, inventoryCounts, inventoryRow, inventoryStatus);
+
 		// Backup
 		const backupLine = element(doc, 'p', 'tres-note');
 		const fileInput = element(doc, 'input');
@@ -882,20 +1197,8 @@
 		});
 		const diagnostics = section(doc, 'Diagnostics', false, diagList, copyButton, copyStatus);
 
-		const filters = [visibility, sorting, rewards, openGroup.element, closedGroup.element, hiddenSection, claimedSection, backupSection];
-		body.append(head, warning, summary, ...filters, diagnostics);
-		panel.append(pill, body);
-		doc.body.appendChild(panel);
-
-		function setExpanded(expanded) {
-			panel.dataset.expanded = String(expanded);
-		}
-		pill.addEventListener('click', () => setExpanded(true));
-		// Clicks outside the panel never collapse it (spec §4.3); only "–" or Esc does.
-		const onKeyDown = (event) => {
-			if (event.key === 'Escape' && panel.dataset.expanded === 'true') setExpanded(false);
-		};
-		doc.addEventListener('keydown', onKeyDown, true);
+		const filters = [visibility, sorting, rewards, openGroup.element, closedGroup.element, hiddenSection, claimedSection, inventorySection, backupSection];
+		body.append(warning, summary, ...filters, diagnostics);
 
 		// Never rebuild while the user is typing in the panel; flush once focus leaves.
 		let pendingView = null;
@@ -961,6 +1264,14 @@
 			}
 			claimedLine.textContent = `${view.claimed.total} rewards marked claimed (${view.claimed.orphans} for campaigns no longer listed).`;
 			clearClaims.disabled = view.claimed.orphans === 0;
+			const inventory = view.inventory;
+			inventoryLine.textContent = inventory.readAt === null
+				? 'Not read yet. Open the Inventory tab once.'
+				: `Inventory last read ${formatAge(view.now - inventory.readAt)} · ${inventory.complete ? 'complete history' : 'recent claims only'}.`;
+			const unmatchedClaims = inventory.unmatched.claims + inventory.unmatched.ambiguous + inventory.unmatched.noTime;
+			inventoryCounts.textContent = inventory.readAt === null ? ''
+				: `${inventory.matched.claims} claims matched · ${inventory.matched.progress} rewards in progress · ${unmatchedClaims} claims unmatched (${inventory.unmatched.ambiguous} ambiguous) · ${inventory.unmatched.groups} In Progress groups unmatched.`;
+			clearInventoryButton.disabled = inventory.readAt === null;
 			backupLine.textContent = view.lastExportAt
 				? `Last backup: ${Math.floor((view.now - view.lastExportAt) / DAY_MS)} days ago.`
 				: 'No backup yet. Export saves your filters and claimed marks to a file.';
@@ -977,12 +1288,72 @@
 				if (isTextInputFocused(doc, panel)) pendingView = view;
 				else render(view);
 			},
-			destroy() {
-				doc.removeEventListener('keydown', onKeyDown, true);
-				panel.remove();
-				style.remove();
-			}
+			destroy
 		};
+	}
+
+	/** The small panel on the Inventory page (spec §11.5): what was read, Scan full history, Clear and rescan, Diagnostics. */
+	function createInventoryPanel(doc, win, actions) {
+		const { panel, pill, body, setExpanded, destroy } = createShell(doc, win, 'TRES Inventory', 'inventory');
+		const line = element(doc, 'p', 'tres-note');
+		const counts = element(doc, 'p', 'tres-note');
+		const status = element(doc, 'p', 'tres-status');
+		const scanButton = button(doc, 'Scan full history (Load More)', () => actions.scanHistory());
+		scanButton.title = 'Click Load More until the whole six-month history is listed';
+		const cancelButton = button(doc, 'Cancel', () => actions.cancelScan());
+		const clearButton = button(doc, 'Clear and rescan', () => setStatus(status, actions.clearAndRescan()));
+		const row = element(doc, 'div', 'tres-row');
+		row.append(scanButton, cancelButton, clearButton);
+		const inventory = section(doc, 'Inventory', false, line, counts, row, status);
+		const diagList = element(doc, 'ul', 'tres-diag');
+		const diagnostics = section(doc, 'Diagnostics', false, diagList);
+		body.append(inventory, diagnostics);
+
+		return {
+			element: panel,
+			isExpanded: () => panel.dataset.expanded === 'true',
+			setExpanded,
+			update(view) {
+				const snapshot = view.snapshot;
+				const history = view.history;
+				const inProgress = snapshot ? snapshot.inProgress.reduce((sum, group) => sum + group.rewards.length, 0) : 0;
+				pill.textContent = !snapshot ? 'TRES'
+					: history.running ? `TRES · loading history (${history.clicks})`
+						: `TRES · ${snapshot.claims.length} claimed · ${inProgress} in progress`;
+				line.textContent = !snapshot
+					? 'The Inventory has not been read yet.'
+					: `Read ${formatAge(view.now - snapshot.readAt)} · ${snapshot.complete ? 'complete history' : 'recent claims only'}.`;
+				counts.textContent = snapshot ? `${snapshot.claims.length} claims · ${snapshot.inProgress.length} drops in progress (${inProgress} rewards).` : '';
+				scanButton.disabled = history.running || !view.loadMore;
+				cancelButton.hidden = !history.running;
+				clearButton.disabled = history.running;
+				if (history.running) setStatus(status, `Loading more… ${history.clicks} clicks so far.`);
+				else if (history.finished) {
+					setStatus(status, history.cancelled ? 'Cancelled.' : history.timedOut ? 'Stopped: Load More did not load anything new.' : 'Finished: the full history is read.');
+				}
+				const d = view.diagnostics;
+				diagList.replaceChildren(...[
+					[`In Progress groups read: ${d.groups} (${d.rewards} rewards)`],
+					[`Claims read: ${d.claims}`],
+					[`Unrecognised time strings: ${d.unknownTimes.length}${d.unknownTimes.length ? ` (${[...new Set(d.unknownTimes)].join(', ')})` : ''}`, d.unknownTimes.length > 0],
+					[`Load More present: ${view.loadMore ? 'yes' : 'no'}`],
+					[`Last read: ${view.lastReadAt || 'never'} (${view.readMs} ms)`],
+					[view.found ? 'Inventory page found.' : 'Inventory page not found yet.', !view.found]
+				].map(([text, bad]) => element(doc, 'li', bad ? 'tres-bad' : '', text)));
+			},
+			destroy
+		};
+	}
+
+	/** "just now", "5 minutes ago", "3 hours ago", "2 days ago". */
+	function formatAge(ms) {
+		const minutes = Math.floor(Math.max(0, ms) / MINUTE_MS);
+		if (minutes < 1) return 'just now';
+		if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+		const hours = Math.floor(minutes / 60);
+		if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+		const days = Math.floor(hours / 24);
+		return `${days} day${days === 1 ? '' : 's'} ago`;
 	}
 
 	/** A collapsible panel section; `open` sets whether it starts expanded (all start collapsed, spec §4.3). */
@@ -1083,12 +1454,14 @@
 	 * Adds (once) the header controls (spec §4.2): a Hide button that hides just this campaign,
 	 * a "⋯" button for the game/publisher options, and the show-hidden reason label.
 	 */
-	function decorateHeader(doc, campaign, reason, showHidden, hiddenByRule) {
+	function decorateHeader(doc, campaign, reason, showHidden, hiddenByRule, progress) {
 		const header = campaign.rootEl.firstElementChild;
 		let controls = header.querySelector(':scope > .tres-controls');
 		if (!controls) {
 			controls = element(doc, 'span', 'tres-controls');
 			controls.setAttribute('data-tres', 'controls');
+			const progressPill = element(doc, 'span', 'tres-header-progress');
+			progressPill.hidden = true;
 			const reasonLabel = element(doc, 'span', 'tres-reason');
 			reasonLabel.hidden = true;
 			const hideButton = element(doc, 'button', 'tres-hide-btn');
@@ -1097,9 +1470,14 @@
 			moreButton.type = 'button';
 			moreButton.title = 'More: hide all campaigns for this game or publisher';
 			moreButton.setAttribute('aria-label', 'More hide options');
-			controls.append(reasonLabel, hideButton, moreButton);
+			controls.append(progressPill, reasonLabel, hideButton, moreButton);
 			header.appendChild(controls);
 		}
+		const progressPill = controls.querySelector('.tres-header-progress');
+		const progressText = progress ? progress.text : '';
+		if (progressPill.textContent !== progressText) progressPill.textContent = progressText;
+		progressPill.title = progress ? progress.title : '';
+		progressPill.hidden = !progress;
 		const hideButton = controls.querySelector('.tres-hide-btn');
 		const hideText = hiddenByRule ? 'Unhide' : 'Hide';
 		if (hideButton.textContent !== hideText) hideButton.textContent = hideText;
@@ -1112,8 +1490,40 @@
 		reasonLabel.hidden = !text;
 	}
 
-	/** Adds (once) the "Claimed" checkbox to each reward tile, and dims tiles that are done. */
-	function decorateTiles(doc, campaign, rules, claimed) {
+	/** The pill text for an Inventory progress entry (spec §11.4). */
+	function progressLabel(progress) {
+		if (progress.state === 'claimable') return 'Ready to claim';
+		if (progress.state === 'connect') return '100% · connect account';
+		if (progress.state === 'complete') return '100%';
+		return progress.requiredText ? `${progress.percent}% of ${progress.requiredText}` : `${progress.percent}%`;
+	}
+
+	/**
+	 * The campaign header's progress pill (spec §11.4): "{claimed}/{total} claimed", plus the highest
+	 * in-progress percentage. Null when no reward is claimed or in progress.
+	 */
+	function campaignProgress(campaign, claimed, progressByKey) {
+		const rewards = campaign.rewards || [];
+		const done = rewards.filter((reward) => claimed[reward.key]).length;
+		const active = rewards.filter((reward) => !claimed[reward.key] && progressByKey.has(reward.key)).map((reward) => progressByKey.get(reward.key));
+		if (!done && !active.length) return null;
+		const max = active.length ? Math.max(...active.map((progress) => progress.percent)) : null;
+		const stateOf = (reward) => {
+			const claim = claimed[reward.key];
+			if (claim) return claim.source === 'inventory' ? 'claimed (Inventory)' : 'claimed';
+			return progressByKey.has(reward.key) ? progressLabel(progressByKey.get(reward.key)) : 'no progress';
+		};
+		return {
+			text: `${done}/${rewards.length} claimed${max === null ? '' : ` · ${max}%`}`,
+			title: rewards.map((reward) => `${reward.name}: ${stateOf(reward)}`).join('\n')
+		};
+	}
+
+	/**
+	 * Adds (once) the "Claimed" checkbox to each reward tile, dims tiles that are done, and shows
+	 * Inventory progress on the image of rewards that aren't claimed (spec §11.4).
+	 */
+	function decorateTiles(doc, campaign, rules, claimed, progressByKey) {
 		if (campaign.rewardsSource !== 'page') return;
 		for (const reward of campaign.rewards) {
 			const tile = reward.tileEl;
@@ -1137,14 +1547,45 @@
 			input.dataset.rewardKey = reward.key;
 			input.dataset.campaignId = campaign.id;
 			input.checked = Boolean(claimed[reward.key]);
+			const claim = claimed[reward.key];
+			const progress = claim ? null : progressByKey.get(reward.key) || null;
 			const typeHidden = rules.hiddenRewardTypes.includes(normalize(reward.type));
 			const note = container.querySelector(':scope > .tres-done-reason');
-			const noteText = input.checked ? '' : typeHidden ? `hidden type: ${reward.type}` : '';
+			// The progress pill takes the bottom of the image, so it replaces the hidden-type note.
+			const noteText = claim ? (claim.source === 'inventory' ? 'claimed (Inventory)' : '') : typeHidden && !progress ? `hidden type: ${reward.type}` : '';
 			if (note.textContent !== noteText) note.textContent = noteText;
 			note.hidden = !noteText;
+			decorateProgress(doc, container, progress);
 			if (rewardDone(reward, rules, claimed)) tile.setAttribute('data-tres-done', '');
 			else tile.removeAttribute('data-tres-done');
 		}
+	}
+
+	/** An Inventory-style progress bar and pill along the bottom of a reward image, or none. */
+	function decorateProgress(doc, container, progress) {
+		let bar = container.querySelector(':scope > .tres-progress');
+		let pill = container.querySelector(':scope > .tres-progress-pill');
+		if (!progress) {
+			if (bar) bar.remove();
+			if (pill) pill.remove();
+			container.removeAttribute('data-tres-in-progress');
+			return;
+		}
+		if (!bar) {
+			bar = element(doc, 'div', 'tres-progress');
+			bar.setAttribute('data-tres', 'progress');
+			bar.append(element(doc, 'div'));
+			pill = element(doc, 'span', 'tres-progress-pill');
+			pill.setAttribute('data-tres', 'progress-pill');
+			container.append(bar, pill);
+		}
+		const width = `${Math.min(100, Math.max(0, progress.percent))}%`;
+		if (bar.firstElementChild.style.width !== width) bar.firstElementChild.style.width = width;
+		const text = progressLabel(progress);
+		if (pill.textContent !== text) pill.textContent = text;
+		pill.title = `From the Inventory: ${text}`;
+		if (progress.percent < 100) container.setAttribute('data-tres-in-progress', '');
+		else container.removeAttribute('data-tres-in-progress');
 	}
 
 	/**
@@ -1186,6 +1627,7 @@
 		for (const node of content.querySelectorAll('[data-tres]')) node.remove();
 		for (const node of content.querySelectorAll('.tres-hidden, .tres-dimmed')) node.classList.remove('tres-hidden', 'tres-dimmed');
 		for (const node of content.querySelectorAll('[data-tres-done]')) node.removeAttribute('data-tres-done');
+		for (const node of content.querySelectorAll('[data-tres-in-progress]')) node.removeAttribute('data-tres-in-progress');
 	}
 
 	/**
@@ -1296,6 +1738,10 @@
 			dirty: new Set(),
 			result: null,
 			reasons: new Map(),
+			inventory: null,
+			match: matchInventory([], null),
+			claimed: {},
+			unwatch: null,
 			lastScanAt: null,
 			scanMs: 0,
 			scanCount: 0,
@@ -1314,6 +1760,14 @@
 			state.active = true;
 			state.data = loadData(storage);
 			if (prune(state.data, clock())) persist();
+			state.inventory = readInventory(storage);
+			// Live sync (spec §11.2): a read in the Inventory tab re-applies the rules here at once.
+			if (storage.watchInventory) {
+				state.unwatch = storage.watchInventory(() => {
+					state.inventory = readInventory(storage);
+					applyAll();
+				});
+			}
 			state.scanner = createScanner();
 			state.panel = createPanel(doc, win, actions);
 			state.menu = createMenu(doc, win);
@@ -1327,6 +1781,8 @@
 			win.clearTimeout(state.timers.scan);
 			win.clearTimeout(state.timers.wait);
 			win.clearInterval(state.timers.tick);
+			if (state.unwatch) state.unwatch();
+			state.unwatch = null;
 			flushWrite();
 			detach();
 			if (state.panel) state.panel.destroy();
@@ -1401,8 +1857,11 @@
 		function applyAll() {
 			const result = state.result;
 			if (!result || !state.panel) return;
-			const { rules, claimed } = state.data;
+			const { rules } = state.data;
 			const enabled = result.recognized;
+			state.match = matchInventory(result.campaigns, state.inventory);
+			const claimed = state.claimed = effectiveClaims(state.data, state.match);
+			const progressByKey = state.match.progressByKey;
 			state.reasons = new Map();
 			if (!enabled) clearDecorations(state.content);
 			for (const campaign of result.campaigns) {
@@ -1411,8 +1870,8 @@
 				if (!enabled) continue;
 				campaign.rootEl.classList.toggle('tres-hidden', Boolean(reason) && !rules.showHidden);
 				campaign.rootEl.classList.toggle('tres-dimmed', Boolean(reason) && rules.showHidden);
-				decorateHeader(doc, campaign, reason, rules.showHidden, Boolean(rules.hiddenCampaigns[campaign.id]));
-				decorateTiles(doc, campaign, rules, claimed);
+				decorateHeader(doc, campaign, reason, rules.showHidden, Boolean(rules.hiddenCampaigns[campaign.id]), campaignProgress(campaign, claimed, progressByKey));
+				decorateTiles(doc, campaign, rules, claimed, progressByKey);
 			}
 			if (enabled) {
 				updateSectionCounts(doc, result, state.reasons, rules.showHidden);
@@ -1494,6 +1953,12 @@
 					}))
 					.sort((a, b) => a.label.localeCompare(b.label)),
 				claimed: { total: claimedEntries.length, orphans: claimedEntries.filter((claim) => !onPage.has(claim.campaignId)).length },
+				inventory: {
+					readAt: state.inventory ? state.inventory.readAt : null,
+					complete: Boolean(state.inventory && state.inventory.complete),
+					matched: { ...state.match.matched },
+					unmatched: { ...state.match.unmatched }
+				},
 				lastExportAt: state.data.lastExportAt,
 				loader: { ...state.loader, timeouts: [...state.loader.timeouts] },
 				summary: summarize(result),
@@ -1650,13 +2115,36 @@
 				state.loader.cancelled = true;
 				applyAll();
 			},
+			/**
+			 * The tile's Claimed toggle (spec §11.4). For a reward the Inventory reports claimed,
+			 * unticking records an override and ticking removes it; otherwise it's a manual mark.
+			 */
 			setClaimed(rewardKey, campaignId, claimedNow) {
 				const campaign = findCampaign(campaignId);
 				const reward = campaign && campaign.rewards && campaign.rewards.find((r) => r.key === rewardKey);
+				const fromInventory = state.match.claimedKeys.has(rewardKey);
 				update((data) => {
-					if (claimedNow) data.claimed[rewardKey] = { name: reward ? reward.name : '', campaignId, claimedAt: clock() };
-					else delete data.claimed[rewardKey];
+					if (claimedNow) {
+						delete data.inventoryOverrides[rewardKey];
+						if (!fromInventory) data.claimed[rewardKey] = { name: reward ? reward.name : '', campaignId, claimedAt: clock() };
+					} else {
+						delete data.claimed[rewardKey];
+						if (fromInventory) data.inventoryOverrides[rewardKey] = { at: clock(), campaignId };
+					}
 				});
+			},
+			clearInventory() {
+				if (!win.confirm('Forget everything read from the Inventory? Rewards you ticked yourself stay claimed.')) return '';
+				storage.writeInventory(null);
+				state.inventory = null;
+				applyAll();
+				return 'Inventory claims cleared.';
+			},
+			/** Goes to the Inventory through Twitch's own tab link, so the single-page app handles it. */
+			openInventory() {
+				const link = [...doc.querySelectorAll(`a[href="${INVENTORY_PATH}"], a[href$="twitch.tv${INVENTORY_PATH}"]`)].find((node) => !node.closest('[data-tres]'));
+				if (link) link.click();
+				else win.location.assign(INVENTORY_PATH);
 			},
 			clearOrphanClaims() {
 				const onPage = new Set(state.result ? state.result.campaigns.map((campaign) => campaign.id) : []);
@@ -1668,7 +2156,7 @@
 				const now = clock();
 				const filename = `tres-drop-campaigns-backup-${localDateStamp(now)}.json`;
 				state.data.lastExportAt = now;
-				const json = JSON.stringify(state.data, null, 2);
+				const json = JSON.stringify({ ...state.data, inventory: state.inventory }, null, 2);
 				try {
 					const url = win.URL.createObjectURL(new win.Blob([json], { type: 'application/json' }));
 					const link = element(doc, 'a');
@@ -1692,6 +2180,12 @@
 					const imported = JSON.parse(await file.text());
 					if (!isPlainObject(imported) || imported.schema !== SCHEMA) return 'Import failed: not a TRES backup file.';
 					state.data = mergeImport(state.data, imported);
+					// The backup's Inventory snapshot replaces ours only if it was read later (spec §11.6).
+					const inventory = sanitizeInventory(imported.inventory);
+					if (inventory && (!state.inventory || inventory.readAt > state.inventory.readAt)) {
+						state.inventory = inventory;
+						storage.writeInventory(inventory);
+					}
 					persist();
 					applyAll();
 					return 'Imported and merged.';
@@ -1705,6 +2199,8 @@
 				update((data) => {
 					data.rules = fresh.rules;
 					data.claimed = {};
+					// The Inventory snapshot is data read from Twitch, not a setting, so it stays (spec §11.6).
+					data.inventoryOverrides = {};
 				});
 				return 'Filters and claimed marks reset.';
 			},
@@ -1714,7 +2210,14 @@
 					url: win.location.href,
 					summary: state.result ? summarize(state.result) : null,
 					campaigns: state.result ? state.result.campaigns.map((campaign) => ({ ...plainCampaign(campaign), hiddenBy: state.reasons.get(campaign.id) || null })) : [],
-					stored: state.data
+					stored: state.data,
+					inventory: state.inventory,
+					inventoryMatch: {
+						matched: state.match.matched,
+						unmatched: state.match.unmatched,
+						claimedKeys: [...state.match.claimedKeys],
+						progress: Object.fromEntries(state.match.progressByKey)
+					}
 				}, null, 2);
 				try {
 					await win.navigator.clipboard.writeText(json);
@@ -1767,34 +2270,249 @@
 		return { route, scanNow, applyAll, deactivate, actions, state, flushWrite };
 	}
 
+	function readInventory(storage) {
+		try {
+			return storage.readInventory ? sanitizeInventory(storage.readInventory()) : null;
+		} catch (error) {
+			console.warn(LOG_PREFIX, 'could not read the Inventory snapshot', error);
+			return null;
+		}
+	}
+
 	/**
-	 * Starts the script in `win`. Returns a handle with stop() for tests.
+	 * The Inventory page (spec §11.2, §11.5): reads what the page shows on arrival and after each
+	 * change, and saves it as the snapshot the Campaigns page matches against. Never writes the
+	 * settings, and never clicks Load More unless the user starts Scan full history.
+	 */
+	function createInventoryApp(win, storage, options) {
+		const doc = win.document;
+		const clock = options.now || (() => Date.now());
+		const pollMs = options.loaderPollMs || LOADER_POLL_MS;
+		const state = {
+			active: false,
+			content: null,
+			observer: null,
+			panel: null,
+			result: null,
+			// Each claim's window is fixed when its time text is first seen, because Twitch
+			// doesn't re-render the text while the page stays open.
+			windows: new WeakMap(),
+			signature: null,
+			writtenAt: 0,
+			lastReadAt: null,
+			readMs: 0,
+			history: idleHistory(),
+			timers: { read: 0, wait: 0 }
+		};
+
+		function idleHistory() {
+			return { running: false, cancelled: false, finished: false, timedOut: false, clicks: 0 };
+		}
+
+		function route() {
+			const wanted = isInventoryPath(win.location.pathname);
+			if (wanted && !state.active) activate();
+			else if (!wanted && state.active) deactivate();
+			else if (wanted && state.content && doc.querySelector(CONTENT_SELECTOR) !== state.content) {
+				detach();
+				waitForContent();
+			}
+		}
+
+		function activate() {
+			state.active = true;
+			state.panel = createInventoryPanel(doc, win, actions);
+			state.signature = null;
+			waitForContent();
+			render();
+		}
+
+		function deactivate() {
+			state.active = false;
+			state.history.cancelled = true;
+			win.clearTimeout(state.timers.read);
+			win.clearTimeout(state.timers.wait);
+			detach();
+			if (state.panel) state.panel.destroy();
+			Object.assign(state, { panel: null, result: null });
+		}
+
+		function waitForContent() {
+			const content = doc.querySelector(CONTENT_SELECTOR);
+			if (content) attach(content);
+			else state.timers.wait = win.setTimeout(waitForContent, CONTENT_WAIT_MS);
+		}
+
+		function attach(content) {
+			state.content = content;
+			state.observer = new win.MutationObserver(scheduleRead);
+			state.observer.observe(content, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['aria-valuenow'] });
+			readNow();
+		}
+
+		function detach() {
+			if (state.observer) state.observer.disconnect();
+			state.observer = null;
+			state.content = null;
+		}
+
+		function scheduleRead() {
+			win.clearTimeout(state.timers.read);
+			state.timers.read = win.setTimeout(readNow, SCAN_DEBOUNCE_MS);
+		}
+
+		function windowOf(img, timeText) {
+			const cached = state.windows.get(img);
+			if (cached && cached.timeText === timeText) return cached.span;
+			const span = relativeWindow(timeText, clock());
+			state.windows.set(img, { timeText, span });
+			return span;
+		}
+
+		/** Reads the page, and saves the snapshot when it changed (or the last save is a minute old). */
+		function readNow() {
+			if (!state.active || !state.content) return null;
+			const now = clock();
+			const timer = Date.now();
+			const result = state.result = extractInventory(state.content, now, windowOf);
+			state.readMs = Date.now() - timer;
+			state.lastReadAt = new Date(now).toLocaleTimeString();
+			if (result.ready) {
+				const { readAt, ...rest } = result.snapshot;
+				const signature = JSON.stringify(rest);
+				if (signature !== state.signature || now - state.writtenAt >= INVENTORY_REFRESH_MS) {
+					state.signature = signature;
+					state.writtenAt = now;
+					try {
+						storage.writeInventory(result.snapshot);
+					} catch (error) {
+						console.warn(LOG_PREFIX, 'could not save the Inventory snapshot', error);
+					}
+				}
+			}
+			render();
+			return result;
+		}
+
+		function render() {
+			if (!state.panel) return;
+			const result = state.result;
+			state.panel.update({
+				found: Boolean(result && result.found),
+				now: clock(),
+				snapshot: readInventory(storage),
+				loadMore: Boolean(result && result.loadMore),
+				history: { ...state.history },
+				diagnostics: result ? result.diagnostics : { groups: 0, rewards: 0, claims: 0, unknownTimes: [] },
+				lastReadAt: state.lastReadAt,
+				readMs: state.readMs
+			});
+		}
+
+		function wait(ms) {
+			return new Promise((resolve) => win.setTimeout(resolve, ms));
+		}
+
+		function claimCount() {
+			return state.content ? state.content.querySelectorAll(CLAIM_IMAGE_SELECTOR).length : 0;
+		}
+
+		/**
+		 * Scan full history (spec §11.2): clicks Load More, waits for new claims to stop arriving,
+		 * and repeats until the button is gone. Only runs when the user asks; can be cancelled.
+		 */
+		async function scanHistory() {
+			if (state.history.running || !state.content) return;
+			const history = state.history = { ...idleHistory(), running: true };
+			render();
+			while (!history.cancelled && state.active) {
+				const page = state.content && state.content.querySelector('.inventory-page');
+				const loadMore = page && findLoadMore(page);
+				if (!loadMore) break;
+				let count = claimCount();
+				loadMore.click();
+				history.clicks += 1;
+				render();
+				let grew = false;
+				let stable = 0;
+				for (let waited = 0; waited < LOADER_MAX_WAIT_MS && !history.cancelled; waited += pollMs) {
+					await wait(pollMs);
+					const next = claimCount();
+					if (next > count) {
+						grew = true;
+						stable = 0;
+						count = next;
+					} else if (grew && ++stable >= LOADER_STABLE_POLLS) {
+						break;
+					}
+				}
+				if (!grew && !history.cancelled) {
+					const stillThere = state.content && state.content.querySelector('.inventory-page') && findLoadMore(state.content.querySelector('.inventory-page'));
+					history.timedOut = Boolean(stillThere);
+					break;
+				}
+			}
+			history.running = false;
+			history.finished = true;
+			if (state.active) readNow();
+		}
+
+		const actions = {
+			scanHistory() {
+				return scanHistory();
+			},
+			cancelScan() {
+				state.history.cancelled = true;
+				render();
+			},
+			clearAndRescan() {
+				storage.writeInventory(null);
+				state.signature = null;
+				state.windows = new WeakMap();
+				readNow();
+				return 'Cleared and read again.';
+			}
+		};
+
+		return { route, readNow, deactivate, actions, state };
+	}
+
+	/**
+	 * Starts the script in `win`. Returns a handle with stop() for tests. `app` runs the
+	 * Campaigns page and `inventory` the Inventory page; each activates only on its own route.
 	 * `options.now` replaces the clock, so tests can run at a sample's capture time;
-	 * `options.loaderPollMs` speeds up the rewards loader in tests.
+	 * `options.loaderPollMs` speeds up the rewards loader and Scan full history in tests.
 	 */
 	function start(win, storage, options = {}) {
 		const app = createApp(win, storage, options);
+		const inventory = createInventoryApp(win, storage, options);
+		// Leaving a page tears it down before the next one starts, so only one panel ever exists.
+		const route = () => {
+			const apps = isInventoryPath(win.location.pathname) ? [app, inventory] : [inventory, app];
+			for (const each of apps) each.route();
+		};
 		const history = win.history;
 		const originals = { pushState: history.pushState, replaceState: history.replaceState };
 		for (const name of Object.keys(originals)) {
 			history[name] = function (...args) {
 				const result = originals[name].apply(this, args);
-				app.route();
+				route();
 				return result;
 			};
 		}
-		const onPopState = () => app.route();
-		win.addEventListener('popstate', onPopState);
+		win.addEventListener('popstate', route);
 		// Fallback for route changes the history hooks can't see (e.g. sandboxed userscript scope).
-		const routePoll = win.setInterval(() => app.route(), ROUTE_POLL_MS);
-		app.route();
+		const routePoll = win.setInterval(route, ROUTE_POLL_MS);
+		route();
 		return {
 			app,
+			inventory,
 			stop() {
 				win.clearInterval(routePoll);
-				win.removeEventListener('popstate', onPopState);
+				win.removeEventListener('popstate', route);
 				Object.assign(history, originals);
 				app.deactivate();
+				inventory.deactivate();
 			}
 		};
 	}
@@ -1818,6 +2536,13 @@
 		mergeImport,
 		prune,
 		learnCampaigns,
+		relativeWindow,
+		extractInventory,
+		sanitizeInventory,
+		matchInventory,
+		effectiveClaims,
+		campaignProgress,
+		progressLabel,
 		rewardDone,
 		hideReason,
 		sortCampaigns,

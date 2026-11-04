@@ -1,25 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tres, loadSample, headerOf } from './helpers.mjs';
+import { tres, loadSample, headerOf, wait, withScript, click } from './helpers.mjs';
 
-const wait = (window, ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
-
-/**
- * Starts the script on a sample at the sample's capture time (so results don't drift as
- * campaigns end in real life) and always stops it, so timers don't keep Node alive.
- */
-async function withScript(name, run, { url, storage = tres.memoryStorage(), prepare, loaderPollMs } = {}) {
-	const { window, document, now } = loadSample(name, url);
-	if (prepare) prepare(document);
-	const handle = tres.start(window, storage, { now: () => now, loaderPollMs });
-	try {
-		return await run({ window, document, handle, app: handle.app, storage });
-	} finally {
-		handle.stop();
-	}
-}
-
-const click = (window, target, type = 'click') => target.dispatchEvent(new window.MouseEvent(type, { bubbles: true, cancelable: true }));
 const roots = (document) => [...document.querySelectorAll('.accordion-header[role="heading"][aria-level="3"]')].map((h) => h.parentElement);
 const hiddenGames = (document) => roots(document).filter((r) => r.classList.contains('tres-hidden')).map((r) => r.querySelector('p').textContent);
 const menuItems = (document) => [...document.querySelectorAll('#tres-menu button')];
@@ -277,10 +259,13 @@ test('unrecognised page: English warning, nothing hidden, nothing injected', asy
 	}, { prepare: (document) => { for (const heading of document.querySelectorAll('h4')) heading.textContent = 'Kampagnen'; } });
 });
 
-test('the script stays inactive on the Inventory page and starts after navigating to campaigns', async () => {
+test('the campaign features stay inactive on the Inventory page and start after navigating to campaigns', async () => {
 	await withScript('page_source_default.html', ({ window, document }) => {
-		assert.equal(document.querySelector('#tres-panel'), null);
+		assert.equal(document.querySelectorAll('#tres-panel').length, 1, 'only the Inventory panel');
+		assert.equal(document.querySelector('#tres-panel').dataset.page, 'inventory');
+		assert.equal(document.querySelectorAll('.drops-root__content [data-tres], .tres-hidden').length, 0, 'no campaign decorations');
 		window.history.pushState({}, '', '/drops/campaigns');
+		assert.equal(document.querySelector('#tres-panel').dataset.page, 'campaigns');
 		assert.equal(document.querySelectorAll('#tres-panel').length, 1);
 		window.history.pushState({}, '', '/directory');
 		assert.equal(document.querySelector('#tres-panel'), null, 'leaving the page removes the panel');
@@ -435,7 +420,7 @@ test('every panel section is collapsible and starts collapsed', async () => {
 		const sections = [...document.querySelectorAll('#tres-panel .tres-body > details')].map((d) => [d.querySelector('summary').textContent.replace(/ \(\d+\)$/, ''), d.open]);
 		assert.deepEqual(sections, [
 			['Visibility', false], ['Sorting', false], ['Rewards', false], ['Open campaigns', false], ['Closed campaigns', false],
-			['Hidden campaigns', false], ['Claimed rewards', false], ['Backup', false], ['Diagnostics', false]
+			['Hidden campaigns', false], ['Claimed rewards', false], ['Inventory', false], ['Backup', false], ['Diagnostics', false]
 		]);
 		assert.equal(document.querySelectorAll('#tres-panel .tres-body > div.tres-section').length, 0, 'no fixed sections left');
 	});
@@ -511,7 +496,11 @@ test('in show-hidden mode the Hide button of a hidden campaign reads Unhide and 
 // ---------------------------------------------------------------------------
 
 test('every element TRES injects has the #99FF33 brand border, and the small ones are pills', async () => {
+	// An Inventory snapshot makes the progress pills appear too (spec §11.4).
+	const inventory = loadSample('page_source_other_tab.html', 'https://www.twitch.tv/drops/inventory');
+	const storage = tres.memoryStorage(null, tres.extractInventory(inventory.document, inventory.now).snapshot);
 	await withScript('page_source_opencampaigns.html', ({ document }) => {
+		assert.ok(document.querySelector('.tres-progress-pill') && document.querySelector('.tres-header-progress:not([hidden])'), 'progress pills present');
 		const css = document.querySelector('#tres-style').textContent;
 		const ruleFor = (selector) => {
 			const rule = css.split('\n').find((line) => line.startsWith(`${selector}{`) || line.startsWith(`${selector},`));
@@ -519,7 +508,8 @@ test('every element TRES injects has the #99FF33 brand border, and the small one
 			return rule;
 		};
 		const pills = ['#tres-panel .tres-pill', '.drops-root__content .tres-hide-btn', '.drops-root__content .tres-reason',
-			'.drops-root__content .tres-claim', '.drops-root__content .tres-done-reason', '.drops-root__content .tres-section-count'];
+			'.drops-root__content .tres-claim', '.drops-root__content .tres-done-reason', '.drops-root__content .tres-section-count',
+			'.drops-root__content .tres-progress-pill', '.drops-root__content .tres-header-progress'];
 		for (const selector of pills) {
 			const rule = ruleFor(selector);
 			assert.match(rule, /border:1px solid #99ff33/, selector);
@@ -533,10 +523,11 @@ test('every element TRES injects has the #99FF33 brand border, and the small one
 			.flatMap((node) => [...node.classList]).filter((name) => name.startsWith('tres-')));
 		for (const name of injectedClasses) {
 			if (name === 'tres-controls') continue; // an invisible wrapper around the header buttons
+			if (name === 'tres-progress') continue; // the progress bar is a bar, not a pill (spec §11.4)
 			assert.ok(css.includes(`.${name}{`) || css.includes(`.${name},`), `.${name} is styled`);
 			assert.ok(pills.some((selector) => selector.endsWith(`.${name}`)) || name === 'tres-more-btn', `.${name} is branded`);
 		}
-	});
+	}, { storage });
 });
 
 test('dimmed campaigns sort to the bottom of their section, then by the chosen order', async () => {

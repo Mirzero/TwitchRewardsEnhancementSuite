@@ -2,7 +2,7 @@
 
 These instructions apply to any AI coding agent working in this repository.
 
-This repo holds a Tampermonkey userscript, `TRES-DropCampaigns.user.js`, that hides unwanted Twitch Drops campaigns on https://www.twitch.tv/drops/campaigns. See `README.md` for the development approach.
+This repo holds one Tampermonkey userscript, `TwitchRewardsEnhancementSuite.user.js` (Twitch Rewards Enhancement Suite, "TRES"). It covers Twitch's Drops pages: it hides and sorts campaigns on https://www.twitch.tv/drops/campaigns, and reads the Inventory tab (/drops/inventory) to learn claimed rewards and progress. All features live in this one script so they share storage. See `README.md` for the development approach.
 
 ## The spec is the source of truth
 
@@ -26,10 +26,10 @@ This repo holds a Tampermonkey userscript, `TRES-DropCampaigns.user.js`, that hi
 
 ## Releases
 
-- The file name is always `TRES-DropCampaigns.user.js`. Tampermonkey updates installed copies from its raw URL on `main`, so the name must never change.
+- The file name is always `TwitchRewardsEnhancementSuite.user.js`. Tampermonkey updates installed copies from its raw URL on `main`, so the name must never change.
 - Pushing to `main` releases the script to every user. Only push with all tests passing. Commit or push only when the owner asks.
 - **Bump `@version` automatically, once per release.** The owner publishes by committing and pushing, so the version must already be bumped by then:
-  - Before changing the script, compare its `@version` with the published one (`git show origin/main:TRES-DropCampaigns.user.js`).
+  - Before changing the script, compare its `@version` with the published one (`git show origin/main:TwitchRewardsEnhancementSuite.user.js`).
   - If they're equal, this is the first change since the last release, so bump the version.
   - If the working copy is already higher, it has been bumped since the last release; don't bump again.
   - Bump the **minor** version (0.6.0 → 0.7.0) for new features or behaviour changes, and the **patch** version (0.6.0 → 0.6.1) for fixes only. If a later change in the same release is a feature but the bump so far was a patch, raise it to a minor bump.

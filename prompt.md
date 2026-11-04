@@ -1,14 +1,15 @@
-# TRES Drop Campaigns — userscript specification
+# Twitch Rewards Enhancement Suite (TRES) — userscript specification
 
-Write a Tampermonkey userscript that lets the user hide Twitch Drops campaigns they don't care about or have finished. Then they can see only the new and relevant ones on https://www.twitch.tv/drops/campaigns.
+Write a Tampermonkey userscript, **Twitch Rewards Enhancement Suite**, for Twitch's Drops pages. On https://www.twitch.tv/drops/campaigns it lets the user hide campaigns they don't care about or have finished, so they see only the new and relevant ones. It is one script for all of TRES's Twitch pages: the Inventory tab (§11) is handled by this same script, so both features share one storage and one install.
 
 This is a from-scratch rewrite. An earlier version (v0.4.0) was installed in Tampermonkey, but its source has been deleted. Its main bugs are listed in §10 so they aren't repeated.
 
-**File name:** the script is always `TRES-DropCampaigns.user.js` in the repository root. Never put the version in the file name.
+**File name:** the script is always `TwitchRewardsEnhancementSuite.user.js` in the repository root. Never put the version in the file name.
 
 - Users install the script from the GitHub repo, and Tampermonkey updates it from that same URL (§1). A file name that changed with each version would break updates for everyone.
 - Each new version overwrites this one file. Previous versions live in git history.
 - The `.user.js` ending lets Tampermonkey offer to install the file when its raw URL is opened.
+- (Up to 0.8.0 the file was `TRES-DropCampaigns.user.js`, with `@name` "Twitch Drops Campaign Filters". At 0.9.0 it was renamed once, deliberately, when it grew beyond the campaigns page. Only the owner had it installed and reinstalled from the new URL. Don't rename it again.)
 
 ---
 
@@ -29,16 +30,16 @@ This is a from-scratch rewrite. An earlier version (v0.4.0) was installed in Tam
 
 ## 1. Metadata
 
-- `@name` Twitch Drops Campaign Filters
+- `@name` Twitch Rewards Enhancement Suite
 - `@namespace` https://github.com/Mirzero/TwitchRewardsEnhancementSuite
 - `@version`: the first repo release is **0.6.0**. It skips 0.5.0 because Stage 1/2 builds at 0.5.0 were pasted into Tampermonkey by hand, and Tampermonkey only updates to a higher version. After that, bump once per release: the minor version for features, the patch version for fixes (see `agents/agents.md` for the exact rule).
   - **Every change pushed to `main` must bump `@version`.** Tampermonkey only installs an update when the version is higher than the installed one.
   - Pushing to `main` releases the change to every user, so push only after the tests in §9 pass.
 - `@homepageURL` https://github.com/Mirzero/TwitchRewardsEnhancementSuite
 - `@supportURL` https://github.com/Mirzero/TwitchRewardsEnhancementSuite/issues
-- `@updateURL` and `@downloadURL`: both set to https://raw.githubusercontent.com/Mirzero/TwitchRewardsEnhancementSuite/main/TRES-DropCampaigns.user.js
+- `@updateURL` and `@downloadURL`: both set to https://raw.githubusercontent.com/Mirzero/TwitchRewardsEnhancementSuite/main/TwitchRewardsEnhancementSuite.user.js
 - `@match https://www.twitch.tv/*`. Twitch is a single-page app, so a user who navigates to the drops page from elsewhere on Twitch never triggers a page load (see §6).
-- `@grant GM_getValue`, `GM_setValue`
+- `@grant GM_getValue`, `GM_setValue`, `GM_addValueChangeListener`, `GM_removeValueChangeListener` (the last two for live sync between tabs, §11.2)
 - `@run-at document-idle`
 
 ## 2. Page facts
@@ -50,7 +51,7 @@ These were checked against the samples captured 2026-11-03.
 - **English only.** The script recognises sections, the closed watermark, the connection state and the redeem line by their English text.
   - If no `<h4>` matches a known section heading, show a clear warning in the panel: "Unrecognised page. Is Twitch set to English?" Then stop: hide nothing and inject nothing.
   - Diagnostics lists any unrecognised `<h4>` text.
-- All campaigns are on one page; none link to separate pages. The Inventory tab is a different route (`/drops/inventory`), and the script must stay inactive there (until §11).
+- All campaigns are on one page; none link to separate pages. The Inventory tab is a different route (`/drops/inventory`). The campaign features stay inactive there, and the Inventory reader (§11) runs instead.
 - All campaigns live inside the single `.drops-root__content` element. Ignore everything outside it.
 - Campaigns are grouped under `<h4>` section headings, in this order:
   - `Open Reward Campaigns`
@@ -246,6 +247,7 @@ A campaign is hidden if **any** rule matches it. Every rule is persisted.
   - Hide rules apply everywhere (§4.1). So toggling a game or publisher in either group toggles it in both, and the two groups always show the same state.
 - **Hidden campaigns:** a list of campaigns hidden by rule 2, each with an "unhide" button. It includes campaigns no longer on the page.
 - **Claimed rewards:** the count, plus a "clear claimed marks for campaigns that are no longer listed" button.
+- **Inventory** (§11.5).
 - **Backup:**
   - Export and Import buttons, plus "last backup: N days ago" (§5).
   - A **Reset all** button, which asks for confirmation. It resets the hide rules and toggles to the §4.1 defaults and clears claimed marks, but **keeps learned rewards**, since those are a cache, not settings.
@@ -353,7 +355,7 @@ Everything TRES injects into Twitch's page is visibly TRES's, never bare text th
 
 Details:
 
-- Use one GM key: `tresDropCampaigns.v2`. Don't read or migrate the v0.4.0 key (`tesDropCampaignFilters`); its IDs aren't compatible.
+- Settings use one GM key: `tresDropCampaigns.v2`. The Inventory snapshot has its own key (§11.6). Don't read or migrate the v0.4.0 key (`tesDropCampaignFilters`); its IDs aren't compatible.
 - Contents:
   ```
   {
@@ -368,6 +370,7 @@ Details:
       hiddenPublishers: { publisherKey: { publisher } }
     },
     claimed:   { rewardKey: { name, campaignId, claimedAt } },
+    inventoryOverrides: { rewardKey: { at, campaignId } },   // §11.4
     campaigns: { id: { firstSeen, lastSeen, end, title, redeem, connection, rewardsSeenAt, rewards: [{ key, name, type, imageUuid }] } }
   }
   ```
@@ -377,8 +380,9 @@ Details:
 
 ## 6. Reactivity and lifecycle
 
-- **Route handling:** run only while `location.pathname` starts with `/drops/campaigns`.
-  - Watch for route changes by wrapping `history.pushState` and `history.replaceState` and listening for `popstate`.
+- **Route handling:** the campaign features run only while `location.pathname` starts with `/drops/campaigns`; the Inventory reader (§11.2) only while it starts with `/drops/inventory`. Each has its own app object, and `start()` routes both.
+  - Watch for route changes by wrapping `history.pushState` and `history.replaceState` and listening for `popstate`, plus a 1-second poll as a fallback.
+  - On a route change, the page being left is torn down before the next one starts, so there is only ever one `#tres-panel`.
   - On entering the page: wait for `.drops-root__content`, then start.
   - On leaving the page: cancel the rewards loader, disconnect observers and remove the panel.
 - **Observer:** one `MutationObserver` on `.drops-root__content`, with `{ childList: true, subtree: true }`.
@@ -436,14 +440,16 @@ if (typeof module !== 'undefined') module.exports = { extractCampaigns, parseDat
 
 - When loaded by Node, don't start automatically. Tests call `start(window, storageAdapter, options)` themselves.
   - `options.now`: a function returning the current time. The live script uses `Date.now`; tests pass the sample's capture time.
-  - `options.loaderPollMs`: shortens the rewards loader's polling interval in tests.
+  - `options.loaderPollMs`: shortens the polling interval of the rewards loader and of Scan full history in tests.
+  - `start()` returns `{ app, inventory, stop }`: the Campaigns app, the Inventory app, and teardown.
+- The storage adapter has `read`/`write` for settings and `readInventory`/`writeInventory`/`watchInventory(callback)` for the snapshot. `memoryStorage(settings, snapshot)` is the test adapter; two windows sharing one behave like two tabs.
 - Make sure this works without Tampermonkey's `GM_*` functions being defined.
 
 ## 9. Tests
 
 Tests live in `tests/*.test.mjs`. They use Node's built-in test runner (`node:test`), with jsdom from `node_modules`. Run them all with `npm test`.
 
-- The tests load `TRES-DropCampaigns.user.js` from the project root.
+- The tests load `TwitchRewardsEnhancementSuite.user.js` from the project root.
 - For each sample, read `now` from the `captured:` line in the sample's header comment. This includes the tests that run the whole script (§9.6): they must pass `options.now`, never the real clock. Otherwise results change as real campaigns end; this broke 4 tests the day after the samples were captured.
 - Pin the timezone to the capture offset: set `process.env.TZ = 'Etc/GMT+7'` before any `Date` is created. Node's own timezone data can disagree with the browser that captured the samples.
 - **Run them every time the script is generated or changed (§0).** Add a test for each new behaviour and each bug fixed.
@@ -453,6 +459,7 @@ Tests live in `tests/*.test.mjs`. They use Node's built-in test runner (`node:te
 - `@version` is valid SemVer.
 - `@updateURL` and `@downloadURL` both equal the raw URL in §1.
 - `@match` is `https://www.twitch.tv/*`.
+- `@grant` lists exactly the four GM calls in §1.
 
 ### 9.2 Utilities (`utils.test.mjs`)
 
@@ -565,6 +572,12 @@ Run `start()` against a sample in jsdom, with an in-memory storage adapter.
   - **Dimmed campaigns sink to the bottom:**
     - With Rise Online and ARC Raiders hidden and show-hidden on, they are the last two in the Open section (newest first), and the rest keep newest-first order. With show-hidden off, the plain sort applies.
     - Under "Twitch order", a hidden but not dimmed campaign leaves the section untouched. Dimming it moves it to the bottom, with the rest in Twitch order. Turning show-hidden off removes the ordering again.
+- **Routes:** on `/drops/inventory`, only the Inventory panel exists and nothing is injected into the content; navigating to Campaigns swaps in the Campaigns panel; leaving both removes everything.
+- `withScript` and `click` live in `helpers.mjs`, shared with `inventory.test.mjs`.
+
+### 9.7 Inventory (`inventory.test.mjs`)
+
+The tests listed in §11.7.
 
 ## 10. Known mistakes to avoid
 
@@ -580,37 +593,197 @@ These are from v0.4.0.
 - Re-scanning everything and rebuilding the whole panel on every DOM mutation.
 - `@match` limited to the drops URL. It doesn't fire on navigation within the single-page app.
 
-## 11. Deferred: claimed and progress from the Inventory page
+## 11. Inventory: claimed rewards and progress
 
-This is **not** for this version; it's recorded so the design leaves room for it. `samples/page_source_other_tab.html` is an Inventory capture.
+The same script reads Twitch's **Inventory** tab (`/drops/inventory`) and uses what it finds on the Campaigns page. **Status: built in 0.9.0.** Tests: `tests/inventory.test.mjs`.
 
-- **In Progress section**, for each campaign:
-  - a title link to `/drops/campaigns?dropID={uuid}`
-  - an end date
-  - for each reward: name, `[role=progressbar][aria-valuenow]`, "N% of X hours", and an image with a REWARD UUID
-- **Claimed section**, for each reward:
-  - reward name, relative time ("1 hour ago", "last month") and an image with a REWARD UUID
-  - no game or campaign
-  - paginated with "Load More"; only the last six months are visible
-- **Matching:**
-  - The reward image UUIDs match the campaigns page exactly. In the 15:09 capture:
-    - In Progress: THE FINALS "PRIME TIME" (3 rewards, 7–31%) and Marvel Rivals "Season 10.5 Twitch Drops" (4 rewards, 4–36%). All 7 matched.
-    - Claimed: all 6 Enshrouded rewards matched.
-  - Claimed rewards from campaigns no longer listed simply don't match. 36 of the 42 in the full history are like that.
-  - Reward names repeat in the Claimed list (A-Class Multi-Tool ×2), so match by UUID, never by name.
-- **Caveat:** recurring campaigns of the same game (daily Albion Online, Black Desert, the Open and Closed pairs) reuse image UUIDs. A UUID match alone could mark today's drop claimed because of yesterday's claim. Require the claim time to fall after the campaign's start. The relative times are coarse, so treat matches older than about a day as uncertain.
-- **Possible approach:**
-  1. The script, which matches all of twitch.tv, reads the Inventory when the user visits `/drops/inventory`.
-  2. It stores the image UUIDs of claimed rewards, with their approximate times, plus progress per campaign.
-  3. The campaigns page then uses that store as an extra source of "claimed" for rule 6, and can show progress badges on headers.
+### 11.1 Inventory page facts
 
-  Manual claimed marks stay as an override.
-- Other possible filters later: "hide subscription-only campaigns" (from the redeem line), and "hide campaigns that need an account I haven't connected" (from Connection).
+These come from four Inventory captures on 2026-11-03, America/Vancouver:
+
+| Sample | Time | State |
+|---|---|---|
+| `page_source_other_tab.html` | 15:09 | Full history (Load More clicked until gone): 42 claims, 2 In Progress groups. |
+| `page_source_inventory_default.html` | 18:44 | First page only: 20 claims plus Load More. 3 groups, including a reward at 100% whose account wasn't connected yet. |
+| `page_source_inventory_just_claimed.html` | 20:34 | 4 Cyberpunk 2077 rewards claimed "32 minutes ago"; their group has left In Progress. |
+| `page_source_inventory_claimable.html` | 21:25 | After connecting the THE FINALS account: 2 rewards show **Claim Now**. |
+
+
+- **Route:** `/drops/inventory`. The page also renders inside `.drops-root__content`, with the stable classes `inventory-page`, `inventory-campaign-info`, `inventory-boxart`, `inventory-drop-image`, `tw-progress-bar` and several `data-test-selector="DropsCampaignInProgressDescription-…"` attributes. Prefer these, plus ARIA attributes and text. Never use obfuscated class names.
+- **In Progress** section, one block per drop group:
+  - `.inventory-campaign-info` holds:
+    - a title link `a[href*="/drops/campaigns?dropID={uuid}"]` (e.g. "PRIME TIME")
+    - an end date ("End Date: Thu, Nov 5, 2:29 AM PDT")
+    - the box art `img.inventory-boxart`
+    - Connect / About This Drop buttons
+  - Each reward has:
+    - its name in a `<p>`
+    - an `img.inventory-drop-image` (alt "Reward Image Icon") whose `src` holds the REWARD UUID
+    - `[role="progressbar"][aria-valuenow]` (0–100)
+    - a caption `<p><span>{N}</span>% of {duration}</p>` (e.g. "36% of 30 minutes", "7% of 4 hours", "100% of 1 hour")
+  - **A reward is in one of three states**, plus a fallback. Find the reward's container by walking up from its image until it also contains the progress bar:
+    - **progress:** below 100%. The image also has the class `inventory-opacity-2` (dimmed).
+    - **connect:** 100%, but the game account isn't connected. A "Connect" link (`<a>`, text "Connect") sits over the image. Seen for THE FINALS at 18:44.
+    - **claimable:** 100%, with a "Claim Now" `<button>` over the image. The name, bar (at 100) and caption stay. Seen at 21:25, after the account was connected.
+    - **complete** (fallback, not seen): 100% with neither a Connect link nor a Claim Now button.
+  - The group's container is the nearest ancestor of `.inventory-campaign-info` that also holds reward images (alt "Reward Image Icon"). If that ancestor holds more than one `.inventory-campaign-info`, the group has no rewards of its own.
+  - **A drop group isn't a whole campaign.** Both its end date and its reward list can differ from the campaign card:
+    - Marvel Rivals' card runs to Nov 15 with 9 rewards. Its group "Season 10.5 Twitch Drops" holds the 4 Angela rewards and ends Nov 6.
+    - Cyberpunk 2077's card "Quadra Paintjobs" has 5 rewards; the group of the same name had 4.
+
+    **Never match by end date or by reward count.**
+  - When all of a group's rewards are claimed, the group leaves In Progress.
+- **Claimed** section (heading `<h5>` "Claimed"), one entry per claimed reward, newest first:
+  - an `img.inventory-drop-image` with alt "Drop image for {name}" and a REWARD UUID in its `src`. Take the name from the alt text.
+  - the reward name in a `<p>`, and the time in the first other non-empty `<p>` of the entry. Find it by walking up from the image, stopping before an ancestor that holds more than one claim image.
+  - a relative time in a `<p>`. Forms seen: "32 minutes ago", "1 hour ago" (singular), "N hours ago" (up to 11), "21 days ago", "last month", "N months ago" (2–6). "just now", seconds and "yesterday" haven't been seen.
+  - **Twitch rounds the elapsed time down.** The same claims, seen in all four captures, give consistent windows only when "N hours ago" means N ≤ elapsed < N+1 hours. For example, Road Scar was "32 minutes ago" at 20:34 and "1 hour ago" at 21:25 (83 minutes).
+  - a quantity, and a disabled "Awarded Drop Connect Button"
+  - **No game, campaign or drop ID.** Names repeat (A-Class Multi-Tool ×2), so match by UUID, never by name.
+  - **Paginated:**
+    - The first page lists **20** claims, followed by a plain `<button>` whose text is "Load More". It has no aria-label or test selector, so find it by its text.
+    - Each click adds more. When the history is exhausted the button is gone (the 15:09 capture: 42 claims, no button).
+    - Only the last six months are listed.
+- A third section, "Rewards" (`<h4>`, e.g. "Sierra Helmet · Code · Redeem"), belongs to Open Reward campaigns. Ignore it.
+
+### 11.2 Reading the Inventory
+
+- **Route handling (§6)** gains a second route. On `/drops/inventory`, start the Inventory reader. When leaving, stop it.
+- **On arrival, and after each DOM change** under `.drops-root__content` (child list, text, and `aria-valuenow`; debounced like §6), read what the page shows and save a snapshot:
+  ```
+  inventory: {
+    readAt,                         // epoch ms of this read
+    complete,                       // true if no Load More is left (the full six months were read)
+    schema: 1,
+    inProgress: [ { dropId, title, endText, rewards: [ { name, imageUuid, percent, requiredText, state } ] } ],   // state: 'progress' | 'connect' | 'claimable' | 'complete'
+    claims:     [ { name, imageUuid, timeText, earliest, latest } ]   // absolute window for the relative time
+  }
+  ```
+  Each read **replaces** the previous snapshot. It isn't merged, because the page is the source of truth.
+  - **Save only a fully rendered page:** don't save until the `<h5>` "Claimed" heading is present. Before that, the list is still loading, and with no Load More button the snapshot would wrongly say `complete: true`.
+  - Save when the content changed, or when the last save is at least a minute old (so "last read" stays honest). Don't save on every read.
+  - **A claim's window is fixed when its time text is first seen.** Twitch doesn't re-render "5 minutes ago" while the page stays open, so measuring from each later read would shift the window. Cache the window per claim image element (a `WeakMap`) together with its text, and recompute only when the text changes.
+  - The Inventory page never writes the settings key; only the snapshot key.
+- **Relative times become an absolute window**, measured from `readAt`. Twitch rounds down (§11.1), so a unit count N means [N, N+1) units elapsed. The singular form ("1 hour ago") is accepted for every unit, and so are "a minute ago" and "an hour ago".
+  - "N minutes ago" → [readAt − (N+1) min, readAt − N min]
+  - "N hours ago" → [readAt − (N+1) h, readAt − N h]
+  - "N days ago" → [readAt − (N+1) d, readAt − N d]
+  - "last month" → [readAt − 61 d, readAt − 28 d]
+  - "N months ago" → [readAt − (N+1)·31 d, readAt − (N−1)·28 d]. Month rounding is unconfirmed, so the window is kept wide.
+  - Not seen, accepted defensively: "just now", "now" and "N seconds ago" → [readAt − 1 min, readAt]; "yesterday" → [readAt − 2 d, readAt − 1 d].
+  - Anything else gives a null window and counts in diagnostics.
+- **Load More is never clicked automatically.** Recent claims are listed first, and those are the ones that matter for current campaigns.
+- **Scan full history** is a button the user clicks (§11.5). Like the rewards loader (§4.5), it clicks Load More, waits for new entries to stop arriving, and repeats until the button disappears. It shows progress, can be cancelled, and then reads the snapshot with `complete: true`.
+  - After each click, wait for the number of claims to grow and then stay the same for 3 polls (200ms each). If nothing new arrives within 8 seconds while Load More is still there, stop and report it.
+- **Live sync between tabs:** `GM_addValueChangeListener` on the snapshot key. When the snapshot changes in another tab (e.g. Inventory and Campaigns open side by side), the Campaigns tab re-reads it and re-applies its rules immediately. Leaving the Campaigns page removes the listener (`GM_removeValueChangeListener`).
+
+### 11.3 Matching the Inventory to campaigns
+
+This happens on the Campaigns page, on every apply, as a pure function `matchInventory(campaigns, inventory)` that returns `{ claimedKeys, progressByKey, matched: { claims, groups, progress }, unmatched: { claims, ambiguous, noTime, groups } }`. Only campaigns whose rewards are known (from the page or storage, §4.5) take part. Nothing derived from the Inventory is stored per reward. It is recomputed from the snapshot, so clearing the snapshot clears every Inventory-sourced mark.
+
+- **In Progress → campaign:**
+  - Candidates are campaigns whose title equals the drop group's title (normalized), **and** that contain at least one reward whose image UUID appears in the group.
+  - If exactly one candidate remains, it's the match. Otherwise fall back to "the only campaign containing all the group's UUIDs".
+  - Otherwise the group is unmatched and counted in diagnostics.
+  - Within the matched campaign, each Inventory reward maps to the campaign reward with the same UUID: `progressByKey[rewardKey] = { percent, requiredText, state }`. If the campaign lists that image more than once, also require the same name; if still ambiguous, skip it.
+  - In the samples, all three groups match by title: PRIME TIME (THE FINALS), Season 10.5 Twitch Drops (Marvel Rivals) and Quadra Paintjobs (Cyberpunk 2077).
+- **Claimed → campaign reward:** a claim maps to a campaign reward when **all** of these hold:
+  - the image UUID is equal;
+  - the claim's time window lies entirely inside the campaign's [start, end];
+  - exactly one campaign reward on the page satisfies the first two.
+
+  If several do, or none do, the claim is not counted. This is the conservative rule: missing a claim costs the user one manual tick, while a false match would wrongly hide a campaign.
+  - **Shared images are real, even between campaigns running at the same time.** In the 2026-11-03 Campaigns sample, 42 image UUIDs appear more than once:
+    - Gray Zone Warfare's "Rogue Ops - MADFINGER" and "Rogue Ops - Stage 4" overlap in time and share most of their images, so a claim for one of them is ambiguous and stays unmatched.
+    - Some campaigns list the same image twice (Viking Rise "Twitch Drops"); a claim for that image also stays unmatched.
+  - Coarse windows such as "last month" rarely fit inside one campaign, so old claims mostly stay unmatched. That's acceptable, because those campaigns have usually ended.
+  - **Unverified:** whether Twitch allows claiming after a campaign ends. No sample shows it; the planned paired capture of a recurring daily drop (samples readme) was too hard to set up. If it happens, such a claim falls outside [start, end] and simply stays unmatched, which is the safe outcome. Don't widen the window to guess.
+  - The matched claims in the samples: the 6 Enshrouded claims (campaign Nov 3 07:00 – Nov 17, claimed between about 08:45 and 13:35 on Nov 3) and the 4 Cyberpunk 2077 claims (about 20:02 on Nov 3).
+- Rewards whose `imageUuid` is null (placeholder images, §2.2) never match. Neither do claims without a window (counted as `noTime`).
+
+### 11.4 Using the matches on the Campaigns page
+
+- **Claimed:**
+  - A reward is claimed if the user ticked it (`data.claimed`), **or** it is in `claimedKeys` and not overridden. `effectiveClaims(data, match)` builds this map; Inventory entries carry `source: 'inventory'`.
+  - Rule 6 (§4.1) uses this combined value, so a campaign whose rewards are all claimed through the Inventory hides itself.
+- **Overrides:**
+  - Unticking a reward that is claimed through the Inventory records `data.inventoryOverrides[rewardKey] = { at, campaignId }`, meaning "not claimed, whatever the Inventory says".
+  - Ticking it again removes the override, and adds no manual mark: the Inventory claim is enough. Overrides survive rescans.
+- **Reward tiles** (when a body is loaded):
+  - The Claimed toggle shows Inventory claims as ticked, with the note "claimed (Inventory)".
+  - Rewards in progress get Inventory-style progress **on their image**: a thin progress bar along the bottom of the image container, filled to the percentage, plus a small branded pill whose text depends on the state (§11.1):
+    - **progress:** "{N}% of {duration}", copied from the Inventory caption.
+    - **connect:** "100% · connect account". Twitch withholds the Claim button until the game account is connected.
+    - **claimable:** "Ready to claim", with the bar full. TRES never claims anything itself; the user claims on the Inventory tab.
+
+    - **complete:** "100%".
+
+    Below 100%, the image is also dimmed slightly, like Twitch's `inventory-opacity-2`.
+  - **Placement:** the bar is 4px high along the very bottom of the image container. The pill sits just above it at the bottom-left and is cut off with an ellipsis if the image is narrow. The Claimed toggle stays top-right. While a progress pill is shown, the "hidden type" note (which uses the same corner) is not.
+  - Claimed rewards show no progress.
+  - These are TRES elements, so they follow §4.7: the pill is branded; the bar may use Twitch's purple fill.
+- **Campaign header:** a progress pill, first in the header's top-right control group (before the reason label and the Hide/⋯ buttons), shown when any of the campaign's rewards are claimed (manually or through the Inventory) or in progress. It reads "{claimed}/{total} claimed", adding " · {max}%" when an unclaimed reward is in progress. Its tooltip has one line per reward: "{name}: claimed (Inventory) | claimed | {progress pill text} | no progress". It works for collapsed campaigns too, using stored rewards.
+- **Stale data:** the snapshot's age is shown in the panel (§11.5). Inventory data is never fetched in the background, so it is only as fresh as the last Inventory visit.
+
+### 11.5 TRES UI on both pages
+
+- **Campaigns page panel: a new collapsible "Inventory" section**, between Claimed rewards and Backup (starts collapsed like the others), containing:
+  - "Inventory last read {N} hours ago · {complete history | recent claims only}", or "Not read yet. Open the Inventory tab once."
+  - Counts: "{N} claims matched · {N} rewards in progress · {N} claims unmatched ({N} ambiguous) · {N} In Progress groups unmatched."
+  - **Clear Inventory claims:** discards the snapshot. Every Inventory-sourced claimed mark and progress display disappears; manual ticks and overrides stay. Asks for confirmation.
+  - **Rescan on Inventory tab:** navigates to `/drops/inventory` by clicking Twitch's own Inventory tab link (`a[href="/drops/inventory"]`), so the single-page app handles it; if there is none, `location.assign`. The read happens on arrival.
+- **Inventory page:** TRES shows the same collapsed pill in the top-right corner, reading "TRES · {claims} claimed · {inProgress rewards} in progress" (plain "TRES" before the first read, "TRES · loading history ({clicks})" during a scan). The panel title is "TRES Inventory". It has two collapsible sections, both starting collapsed:
+  - **Inventory:** last read time, whether the history is complete, the counts, and the buttons:
+    - **Scan full history (Load More)**, disabled when there is no Load More, with a Cancel button and a status line while it runs.
+    - **Clear and rescan:** discards the snapshot and reads the page again.
+  - **Diagnostics:**
+    - In Progress groups read
+    - claims read
+    - unrecognised time strings
+    - whether Load More is present
+    - last read time and how long it took
+    - whether the Inventory page was found
+
+  It has no filter sections; those only make sense on the Campaigns page. Nothing is injected into the Inventory page itself.
+- Both panels, all pills, bars and buttons follow the branding rules (§4.7).
+
+### 11.6 Storage additions (§5)
+
+- **The snapshot has its own GM key, `tresInventory.v1`**, not a field of the settings. Only the Inventory tab writes it (plus "Clear Inventory claims" and Import on the Campaigns tab). With one shared key, a Campaigns tab open alongside would save its stale copy over a fresh Inventory read.
+- `data.inventoryOverrides`: { rewardKey: { at, campaignId } }, in the settings (§5).
+- A stored snapshot is sanitized on read (`sanitizeInventory`); anything invalid becomes null.
+- **Export/Import:** the backup file holds the settings plus an `inventory` field with the snapshot. On import, the backup's snapshot replaces ours only if its `readAt` is newer, and overrides are unioned.
+- **Reset all** clears overrides but keeps the snapshot, which is data read from Twitch rather than a setting. "Clear Inventory claims" is the way to drop the snapshot.
+- **Prune** removes overrides whose campaign was pruned.
+
+### 11.7 Tests to add (§9)
+
+- **Extraction** from the four Inventory samples (§11.1):
+  - in-progress groups, rewards, percentages, UUIDs and states. For example, at 18:44 PRIME TIME has 3 rewards at 36%, 100% (connect) and 73%; at 21:25 two of them are claimable.
+  - claims with names, UUIDs and time strings: 42 in the full-history capture, 20 in each first-page capture
+  - Load More present in the three first-page captures and absent from the full one
+- **Relative-time windows** for every form seen, the defensive forms, and an unknown form giving a null window.
+- **Window consistency:** the Enshrouded and Cyberpunk claims, read from all four captures, give overlapping windows. This guards the round-down rule.
+- **`matchInventory`**, using the Campaigns sample (`page_source_opencampaigns.html`) with each Inventory sample:
+  - In Progress matches by title and UUID despite a different end date (Marvel Rivals: Nov 6 vs Nov 15) and a different reward count (Quadra Paintjobs: 4 of 5).
+  - All 6 Enshrouded claims match, so Enshrouded hides. The 4 Cyberpunk 2077 claims match (in the 20:34 and 21:25 captures), and the campaign stays visible because its fifth reward isn't claimed.
+  - Ambiguous claims stay unmatched. Use a hand-written claim with a Gray Zone Warfare UUID shared by MADFINGER and Stage 4, timed inside both.
+  - **Recurring campaigns** (no sample; hand-written): two instances of one campaign a day apart sharing UUIDs; a claim timed inside only the first instance marks only that one.
+  - Windowless claims ("last month" spanning several campaigns, unknown strings) stay unmatched.
+- **Overrides:** an override beats an Inventory claim. Clearing the snapshot removes Inventory claims but keeps manual ticks and overrides.
+- **Live script:** on `/drops/inventory`, the Inventory pill and panel appear, the Campaigns panel doesn't, nothing is injected into the page, and the settings are never written. On the Campaigns page with a stored snapshot: Enshrouded hides, tiles show "claimed (Inventory)" and progress, headers show the progress pill. Unticking records an override; Clear Inventory claims; live sync from another "tab"; Reset all and Import. Scan full history clicks a stubbed Load More until it disappears, and can be cancelled. Rescan follows Twitch's own link.
+- **Branding (§4.7):** the progress pill and header pill are branded pills; the bar is exempt.
+- **Metadata:** the `@grant` list.
+
+### 11.8 Still deferred
+
+- "Hide subscription-only campaigns" (from the redeem line) and "hide campaigns that need an account I haven't connected" (from Connection).
+- Fetching Inventory data in the background without visiting the tab.
 
 ## 12. Deliverables
 
 1. The assumptions list (§0).
-2. `TRES-DropCampaigns.user.js`, with `@version` bumped (§1).
+2. `TwitchRewardsEnhancementSuite.user.js`, with `@version` bumped (§1).
 3. `tests/*.test.mjs` (§9), plus the output of `npm test` showing every test passing.
 4. **Live validation steps.** Write a numbered checklist the owner can follow on the real page. Include the following checks:
    - Compare the diagnostics header count with the campaigns parsed.
@@ -627,3 +800,10 @@ This is **not** for this version; it's recorded so the design leaves room for it
    - Export, Reset, Import, and confirm the state comes back.
    - Navigate away within Twitch and back, and confirm the panel returns.
    - Toggle "Show hidden" and check that each dimmed campaign's reason is correct.
+   - **Inventory (§11):**
+     - Open the Inventory tab. Confirm the pill reads "TRES · N claimed · M in progress" and matches what Twitch lists, and that Diagnostics shows no unrecognised time strings.
+     - Run Scan full history; confirm Load More is clicked until it disappears and the panel says the history is complete.
+     - Go back to Campaigns. Confirm a fully claimed campaign is hidden, its tiles say "claimed (Inventory)", and an in-progress campaign shows the header pill and the progress on its reward images, with the same percentages as the Inventory.
+     - Untick one Inventory claim, reload, and confirm it stays unticked.
+     - With Campaigns and Inventory open in two tabs, let a percentage change (or claim a reward) and confirm the Campaigns tab updates without a reload.
+     - Clear Inventory claims, then Rescan on Inventory tab, and confirm the marks come back.

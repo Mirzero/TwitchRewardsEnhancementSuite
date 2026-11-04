@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { SCRIPT_PATH } from './helpers.mjs';
 
-const RAW_URL = 'https://raw.githubusercontent.com/Mirzero/TwitchRewardsEnhancementSuite/main/TRES-DropCampaigns.user.js';
+const RAW_URL = 'https://raw.githubusercontent.com/Mirzero/TwitchRewardsEnhancementSuite/main/TwitchRewardsEnhancementSuite.user.js';
 
 function metadata() {
 	const source = readFileSync(SCRIPT_PATH, 'utf8');
@@ -30,4 +30,8 @@ test('@updateURL and @downloadURL point at the raw file on main', () => {
 
 test('@match covers all of twitch.tv', () => {
 	assert.deepEqual(metadata().match, ['https://www.twitch.tv/*']);
+});
+
+test('@grant lists the storage calls, including live sync between tabs (spec §11.2)', () => {
+	assert.deepEqual(metadata().grant, ['GM_getValue', 'GM_setValue', 'GM_addValueChangeListener', 'GM_removeValueChangeListener']);
 });

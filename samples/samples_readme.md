@@ -25,7 +25,7 @@ Things to know:
 
 ## Samples
 
-All of these exist. They were captured on 2026-11-03 (America/Vancouver): the campaigns-page samples between 14:41 and 14:56, and the Inventory sample at 15:09.
+All of these exist except the paired and Open Reward samples, which are optional. They were captured on 2026-11-03 (America/Vancouver): the campaigns-page samples between 14:41 and 14:56, and the Inventory samples at 15:09, 18:44, 20:34 and 21:25.
 
 | File | Page | How to capture | What it's for |
 |---|---|---|---|
@@ -33,7 +33,11 @@ All of these exist. They were captured on 2026-11-03 (America/Vancouver): the ca
 | `page_source_opencampaigns.html` | /drops/campaigns | Prepare first (see below). Then run `await tresCapture('page_source_opencampaigns.html', [])` | Every campaign's body: title, reward names, reward types, earn requirements, connection state, closed watermark. |
 | `page_source_single_expanded.html` | /drops/campaigns | Reload. Open one campaign by hand (ARC Raiders last time). Then run `await tresCapture('page_source_single_expanded.html')` | The real state the script sees: one body present, its button set to `aria-expanded="true"`. |
 | `page_source_expand_then_collapse.html` | /drops/campaigns | Continue straight from the previous sample, without reloading. Close that same campaign, wait 2 seconds, then run `await tresCapture('page_source_expand_then_collapse.html')` | Shows Twitch keeps the body after closing and only changes `aria-expanded` and a CSS class. |
-| `page_source_other_tab.html` | /drops/inventory | Click the **Inventory** tab (or open https://www.twitch.tv/drops/inventory). Click **Load More** under Claimed until it disappears, if you want the full history. Paste the snippet again, then run `await tresCapture('page_source_other_tab.html')`. The header will say `campaigns: 0`, which is expected. | The In Progress (with per-reward %) and Claimed lists. Used to plan claimed and progress detection later. |
+| `page_source_other_tab.html` | /drops/inventory | Click the **Inventory** tab (or open https://www.twitch.tv/drops/inventory). Click **Load More** under Claimed until it disappears, if you want the full history. Paste the snippet again, then run `await tresCapture('page_source_other_tab.html')`. The header will say `campaigns: 0`, which is expected. | The In Progress (with per-reward %) and Claimed lists, with the full history. Used by `tests/inventory.test.mjs`. |
+| `page_source_inventory_default.html` | /drops/inventory | Reload Inventory and don't click anything, especially not Load More. Then run `await tresCapture('page_source_inventory_default.html')` | The Load More button's markup and how many claims the first page shows. `page_source_other_tab.html` was fully expanded, so it has neither. |
+| `page_source_inventory_claimable.html` | /drops/inventory | When a reward shows **Claim Now** (100%, account connected) and you haven't clicked it yet. Run `await tresCapture('page_source_inventory_claimable.html')` | The claimable state. The 2026-11-03 capture shows THE FINALS rewards with Claim Now. |
+| `page_source_inventory_just_claimed.html` | /drops/inventory | Within a few minutes after claiming. Run `await tresCapture('page_source_inventory_just_claimed.html')` | The minute form of the claim time ("32 minutes ago" in the 2026-11-03 capture), and a group leaving In Progress once claimed. |
+| `page_source_inventory_paired.html` + `page_source_campaigns_paired.html` | both | **Optional; not captured** (hard to set up). Capture both a few minutes apart, on a day after you claimed a **recurring daily drop** (e.g. Albion Online or Black Desert) whose new instance is now listed. Inventory: `await tresCapture('page_source_inventory_paired.html')`. Campaigns: `await tresCapture('page_source_campaigns_paired.html', [])` | Tests the claim-matching rule: yesterday's claim must not mark today's instance claimed. Also shows whether claims can happen after a campaign has ended. Note which game you used. |
 | `page_source_open_reward.html` | /drops/campaigns | Optional. Only when an "Open Reward Campaigns" section exists. Run `await tresCapture('page_source_open_reward.html', ['<game name>'])` | The Open Reward layout, which differs from Drop campaigns. No current sample. |
 
 ### Preparing for `page_source_opencampaigns.html`
@@ -84,6 +88,9 @@ These findings feed `../prompt.md` §2.
     - paginated with "Load More", and limited to the last six months
     - The capture has the full history: 42 rewards, no "Load More" left.
     - Names repeat (A-Class Multi-Tool ×2, Atlas Firework Pack ×2), so match by image UUID, not by name.
+  - The first page shows 20 claims and a "Load More" button.
+  - A reward at 100% shows a "Connect" link until the game account is connected, then a "Claim Now" button.
+  - Claim times are rounded down ("1 hour ago" means 60–119 minutes). The four Inventory captures agree on this.
   - Reward image UUIDs on the Inventory page match the campaigns page exactly. All 7 in-progress rewards (THE FINALS, Marvel Rivals) and all 6 claimed Enshrouded rewards match. Within one game, recurring campaigns reuse the same images.
 
 ## Cases samples can't cover

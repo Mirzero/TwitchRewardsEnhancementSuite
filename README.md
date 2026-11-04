@@ -35,12 +35,12 @@ When Twitch changes its markup, start again at step 1. Re-capture the samples, c
 | `prompt.md` | The specification the script is generated from. |
 | `samples/` | Captured page snapshots, the capture helper, and `samples_readme.md`. |
 | `tests/` | Acceptance tests (generated, run with Node + jsdom). |
-| `TRES-DropCampaigns.user.js` | The generated script. Its file name never changes, because Tampermonkey checks this URL for updates. |
+| `TwitchRewardsEnhancementSuite.user.js` | The generated script. Its file name never changes, because Tampermonkey checks this URL for updates. |
 
 ## Install
 
 1. Install the [Tampermonkey](https://www.tampermonkey.net/) browser extension.
-2. Open **[TRES-DropCampaigns.user.js](https://raw.githubusercontent.com/Mirzero/TwitchRewardsEnhancementSuite/main/TRES-DropCampaigns.user.js)**. Tampermonkey shows an install page; click **Install**.
+2. Open **[TwitchRewardsEnhancementSuite.user.js](https://raw.githubusercontent.com/Mirzero/TwitchRewardsEnhancementSuite/main/TwitchRewardsEnhancementSuite.user.js)**. Tampermonkey shows an install page; click **Install**.
 
 Tampermonkey checks this URL for updates on its normal schedule. To check right away, go to Dashboard → Installed userscripts and click the script's update link.
 
